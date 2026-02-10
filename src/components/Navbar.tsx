@@ -72,9 +72,11 @@ const Navbar = () => {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem className="text-xs text-muted-foreground" disabled>
-                <User className="h-3 w-3 mr-2" />
-                {user.email}
+              <DropdownMenuItem asChild>
+                <Link to="/profile" className="flex items-center">
+                  <User className="h-3 w-3 mr-2" />
+                  My Profile
+                </Link>
               </DropdownMenuItem>
               <DropdownMenuItem onClick={signOut} className="text-destructive focus:text-destructive">
                 <LogOut className="h-3 w-3 mr-2" />
