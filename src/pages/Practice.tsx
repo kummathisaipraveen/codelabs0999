@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Play, RotateCcw, Send, MessageCircle, ChevronRight, CheckCircle2, XCircle, Lightbulb, Loader2 } from "lucide-react";
+import { Play, RotateCcw, Send, MessageCircle, ChevronRight, CheckCircle2, XCircle, Lightbulb, Loader2, Bot, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,8 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+
+type ChatMsg = { role: "user" | "assistant"; content: string };
 
 interface TestCase {
   input: string;
@@ -53,9 +55,103 @@ const PracticePage = () => {
   const [output, setOutput] = useState<string | null>(null);
   const [showChat, setShowChat] = useState(false);
   const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
   const [hasRun, setHasRun] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [runResults, setRunResults] = useState<{ input: string; expected: string; passed: boolean }[]>([]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
+
+  const sendChatMessage = useCallback(async () => {
+    if (!chatInput.trim() || isChatLoading) return;
+
+    const userMsg: ChatMsg = { role: "user", content: chatInput.trim() };
+    const updatedMessages = [...chatMessages, userMsg];
+    setChatMessages(updatedMessages);
+    setChatInput("");
+    setIsChatLoading(true);
+
+    let assistantContent = "";
+
+    try {
+      const problemContext = problem
+        ? `Title: ${problem.title}\nDifficulty: ${problem.difficulty}\nConcepts: ${problem.concepts.join(", ")}\nDescription: ${problem.description}\nHint: ${problem.hint || "None"}`
+        : "";
+
+      const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/socratic-chat`;
+
+      const resp = await fetch(CHAT_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+        },
+        body: JSON.stringify({
+          messages: updatedMessages,
+          problemContext,
+        }),
+      });
+
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({ error: "AI service error" }));
+        throw new Error(errData.error || `Error ${resp.status}`);
+      }
+
+      if (!resp.body) throw new Error("No response stream");
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let textBuffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        textBuffer += decoder.decode(value, { stream: true });
+
+        let newlineIndex: number;
+        while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
+          let line = textBuffer.slice(0, newlineIndex);
+          textBuffer = textBuffer.slice(newlineIndex + 1);
+          if (line.endsWith("\r")) line = line.slice(0, -1);
+          if (line.startsWith(":") || line.trim() === "") continue;
+          if (!line.startsWith("data: ")) continue;
+
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === "[DONE]") break;
+
+          try {
+            const parsed = JSON.parse(jsonStr);
+            const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+            if (content) {
+              assistantContent += content;
+              setChatMessages((prev) => {
+                const last = prev[prev.length - 1];
+                if (last?.role === "assistant") {
+                  return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: assistantContent } : m);
+                }
+                return [...prev, { role: "assistant", content: assistantContent }];
+              });
+            }
+          } catch {
+            textBuffer = line + "\n" + textBuffer;
+            break;
+          }
+        }
+      }
+    } catch (e: any) {
+      toast({ title: "Chat error", description: e.message, variant: "destructive" });
+      // Remove user message if no response came
+      if (!assistantContent) {
+        setChatMessages((prev) => prev.slice(0, -1));
+      }
+    } finally {
+      setIsChatLoading(false);
+    }
+  }, [chatInput, chatMessages, isChatLoading, problem, toast]);
 
   // Set code when problem loads
   const currentCode = code || problem?.default_code || "";
@@ -290,41 +386,91 @@ const PracticePage = () => {
         {/* Chat sidebar */}
         <motion.div
           initial={false}
-          animate={{ width: showChat ? 320 : 48 }}
+          animate={{ width: showChat ? 360 : 48 }}
           className="border-l border-border/50 flex-shrink-0 overflow-hidden"
         >
           {showChat ? (
-            <div className="flex flex-col h-full w-[320px]">
+            <div className="flex flex-col h-full w-[360px]">
               <div className="flex items-center justify-between border-b border-border/50 px-4 py-3">
                 <div className="flex items-center gap-2">
                   <MessageCircle className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-semibold">AI Assistant</span>
+                  <span className="text-sm font-semibold">Socratic Guide</span>
                 </div>
                 <Button size="sm" variant="ghost" onClick={() => setShowChat(false)} className="h-6 w-6 p-0">
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
-              <div className="flex-1 p-4 overflow-y-auto space-y-4">
-                <div className="glass rounded-lg p-3 text-xs text-muted-foreground">
-                  <div className="flex items-center gap-1.5 text-primary font-semibold mb-1">
-                    <Lightbulb className="h-3 w-3" />
-                    Socratic Guide
+              <div className="flex-1 p-4 overflow-y-auto space-y-3">
+                {/* Welcome message */}
+                <div className="flex gap-2">
+                  <div className="flex-shrink-0 h-6 w-6 rounded-full gradient-primary flex items-center justify-center">
+                    <Bot className="h-3 w-3 text-primary-foreground" />
                   </div>
-                  I see you're working on {problem.title}. {problem.hint || "Think carefully about the approach before coding."}
+                  <div className="glass rounded-lg rounded-tl-none p-3 text-xs text-muted-foreground max-w-[280px]">
+                    <div className="flex items-center gap-1.5 text-primary font-semibold mb-1">
+                      <Lightbulb className="h-3 w-3" />
+                      Socratic Guide
+                    </div>
+                    I see you're working on <strong className="text-foreground">{problem.title}</strong>. Ask me anything — I'll guide you through questions, not answers!
+                  </div>
                 </div>
+
+                {/* Chat messages */}
+                {chatMessages.map((msg, i) => (
+                  <div key={i} className={`flex gap-2 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
+                    <div className={`flex-shrink-0 h-6 w-6 rounded-full flex items-center justify-center ${msg.role === "user" ? "bg-secondary" : "gradient-primary"}`}>
+                      {msg.role === "user" ? (
+                        <User className="h-3 w-3 text-foreground" />
+                      ) : (
+                        <Bot className="h-3 w-3 text-primary-foreground" />
+                      )}
+                    </div>
+                    <div className={`rounded-lg p-3 text-xs max-w-[280px] whitespace-pre-wrap ${
+                      msg.role === "user"
+                        ? "bg-primary/10 text-foreground rounded-tr-none"
+                        : "glass text-muted-foreground rounded-tl-none"
+                    }`}>
+                      {msg.content}
+                      {msg.role === "assistant" && isChatLoading && i === chatMessages.length - 1 && (
+                        <span className="inline-block w-1.5 h-3 bg-primary/50 animate-pulse ml-0.5" />
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                {isChatLoading && chatMessages[chatMessages.length - 1]?.role !== "assistant" && (
+                  <div className="flex gap-2">
+                    <div className="flex-shrink-0 h-6 w-6 rounded-full gradient-primary flex items-center justify-center">
+                      <Bot className="h-3 w-3 text-primary-foreground" />
+                    </div>
+                    <div className="glass rounded-lg rounded-tl-none p-3">
+                      <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                    </div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
               </div>
               <div className="border-t border-border/50 p-3">
-                <div className="flex gap-2">
+                <form
+                  onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
+                  className="flex gap-2"
+                >
                   <Input
                     value={chatInput}
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => setChatInput(e.target.value)}
                     placeholder="Ask for a hint..."
                     className="text-xs bg-card border-border/50"
+                    disabled={isChatLoading}
                   />
-                  <Button size="sm" className="gradient-primary text-primary-foreground px-3">
-                    <Send className="h-3 w-3" />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={isChatLoading || !chatInput.trim()}
+                    className="gradient-primary text-primary-foreground px-3"
+                  >
+                    {isChatLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
                   </Button>
-                </div>
+                </form>
               </div>
             </div>
           ) : (
