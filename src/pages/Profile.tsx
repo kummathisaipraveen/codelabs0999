@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { motion } from "framer-motion";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -7,7 +7,10 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
-import { Trophy, Flame, Target, Zap, Star, CheckCircle2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Trophy, Flame, Target, Zap, Star, CheckCircle2, Pencil, Camera, Check, X, Loader2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 interface UserPoints {
   total_points: number;
@@ -40,7 +43,14 @@ const Profile = () => {
   const [solvedProblems, setSolvedProblems] = useState<SolvedProblem[]>([]);
   const [badges, setBadges] = useState<EarnedBadge[]>([]);
   const [displayName, setDisplayName] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -56,13 +66,16 @@ const Profile = () => {
 
       const [pointsRes, profileRes, subsRes, badgesRes] = await Promise.all([
         supabase.from("user_points").select("*").eq("user_id", user.id).single(),
-        supabase.from("profiles").select("display_name").eq("user_id", user.id).single(),
+        supabase.from("profiles").select("display_name, avatar_url").eq("user_id", user.id).single(),
         supabase.from("submissions").select("problem_id, score, tests_passed, tests_total, created_at").eq("user_id", user.id).order("created_at", { ascending: false }),
         supabase.from("user_badges").select("earned_at, badge_id").eq("user_id", user.id),
       ]);
 
       if (pointsRes.data) setPoints(pointsRes.data);
-      if (profileRes.data) setDisplayName(profileRes.data.display_name || user.email || "");
+      if (profileRes.data) {
+        setDisplayName(profileRes.data.display_name || user.email || "");
+        setAvatarUrl(profileRes.data.avatar_url);
+      }
 
       // Enrich submissions with problem titles
       if (subsRes.data && subsRes.data.length > 0) {
@@ -113,6 +126,58 @@ const Profile = () => {
     fetchData();
   }, [user]);
 
+  const handleSaveName = async () => {
+    if (!user || !editName.trim()) return;
+    setSaving(true);
+    const { error } = await supabase
+      .from("profiles")
+      .update({ display_name: editName.trim() })
+      .eq("user_id", user.id);
+    setSaving(false);
+    if (error) {
+      toast({ title: "Error", description: "Failed to update name.", variant: "destructive" });
+    } else {
+      setDisplayName(editName.trim());
+      setEditing(false);
+      toast({ title: "Profile updated" });
+    }
+  };
+
+  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+    if (!file.type.startsWith("image/")) {
+      toast({ title: "Invalid file", description: "Please upload an image.", variant: "destructive" });
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast({ title: "File too large", description: "Max 2MB.", variant: "destructive" });
+      return;
+    }
+
+    setUploadingAvatar(true);
+    const ext = file.name.split(".").pop();
+    const path = `${user.id}/avatar.${ext}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("avatars")
+      .upload(path, file, { upsert: true });
+
+    if (uploadError) {
+      setUploadingAvatar(false);
+      toast({ title: "Upload failed", description: uploadError.message, variant: "destructive" });
+      return;
+    }
+
+    const { data: urlData } = supabase.storage.from("avatars").getPublicUrl(path);
+    const publicUrl = `${urlData.publicUrl}?t=${Date.now()}`;
+
+    await supabase.from("profiles").update({ avatar_url: publicUrl }).eq("user_id", user.id);
+    setAvatarUrl(publicUrl);
+    setUploadingAvatar(false);
+    toast({ title: "Avatar updated" });
+  };
+
   if (authLoading || loading) {
     return (
       <div className="min-h-screen bg-background pt-24 px-4">
@@ -141,11 +206,52 @@ const Profile = () => {
           animate={{ opacity: 1, y: 0 }}
           className="glass rounded-2xl p-8 flex items-center gap-6"
         >
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl gradient-primary text-2xl font-bold text-primary-foreground shrink-0">
-            {displayName.charAt(0).toUpperCase()}
+          {/* Avatar */}
+          <div className="relative group shrink-0">
+            {avatarUrl ? (
+              <img src={avatarUrl} alt="Avatar" className="h-16 w-16 rounded-2xl object-cover" />
+            ) : (
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl gradient-primary text-2xl font-bold text-primary-foreground">
+                {displayName.charAt(0).toUpperCase()}
+              </div>
+            )}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingAvatar}
+              className="absolute inset-0 flex items-center justify-center rounded-2xl bg-background/70 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+            >
+              {uploadingAvatar ? <Loader2 className="h-5 w-5 animate-spin text-foreground" /> : <Camera className="h-5 w-5 text-foreground" />}
+            </button>
+            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
           </div>
-          <div>
-            <h1 className="text-2xl font-bold font-heading">{displayName}</h1>
+
+          {/* Name */}
+          <div className="flex-1 min-w-0">
+            {editing ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="h-9 max-w-xs bg-secondary/50 border-border/50"
+                  maxLength={50}
+                  autoFocus
+                  onKeyDown={(e) => e.key === "Enter" && handleSaveName()}
+                />
+                <Button size="icon" variant="ghost" onClick={handleSaveName} disabled={saving} className="h-8 w-8">
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 text-accent" />}
+                </Button>
+                <Button size="icon" variant="ghost" onClick={() => setEditing(false)} className="h-8 w-8">
+                  <X className="h-4 w-4 text-muted-foreground" />
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold font-heading truncate">{displayName}</h1>
+                <Button size="icon" variant="ghost" onClick={() => { setEditName(displayName); setEditing(true); }} className="h-7 w-7 shrink-0">
+                  <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                </Button>
+              </div>
+            )}
             <p className="text-muted-foreground text-sm">{user?.email}</p>
           </div>
         </motion.div>
