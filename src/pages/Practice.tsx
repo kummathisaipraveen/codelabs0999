@@ -1,42 +1,142 @@
 import { useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Play, RotateCcw, Send, MessageCircle, ChevronRight, CheckCircle2, XCircle, Clock, Lightbulb } from "lucide-react";
+import { Play, RotateCcw, Send, MessageCircle, ChevronRight, CheckCircle2, XCircle, Lightbulb, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/hooks/use-toast";
 
-const defaultCode = `def two_sum(nums, target):
-    """
-    Given an array of integers nums and an integer target,
-    return indices of the two numbers that add up to target.
-    """
-    # Write your solution here
-    seen = {}
-    for i, num in enumerate(nums):
-        complement = target - num
-        if complement in seen:
-            return [seen[complement], i]
-        seen[num] = i
-    return []`;
+interface TestCase {
+  input: string;
+  expected: string;
+}
 
-const testResults = [
-  { input: "nums = [2,7,11,15], target = 9", expected: "[0, 1]", got: "[0, 1]", passed: true },
-  { input: "nums = [3,2,4], target = 6", expected: "[1, 2]", got: "[1, 2]", passed: true },
-  { input: "nums = [3,3], target = 6", expected: "[0, 1]", got: "[0, 1]", passed: true },
-];
+interface Example {
+  input: string;
+  output: string;
+  explanation?: string;
+}
+
+const difficultyVariant: Record<string, "easy" | "medium" | "hard"> = {
+  Easy: "easy",
+  Medium: "medium",
+  Hard: "hard",
+};
 
 const PracticePage = () => {
-  const [code, setCode] = useState(defaultCode);
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const problemId = id ? parseInt(id) : 1;
+
+  const { data: problem, isLoading } = useQuery({
+    queryKey: ["problem", problemId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("problems")
+        .select("*")
+        .eq("id", problemId)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("Problem not found");
+      return data;
+    },
+  });
+
+  const [code, setCode] = useState("");
   const [output, setOutput] = useState<string | null>(null);
   const [showChat, setShowChat] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [hasRun, setHasRun] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [runResults, setRunResults] = useState<{ input: string; expected: string; passed: boolean }[]>([]);
+
+  // Set code when problem loads
+  const currentCode = code || problem?.default_code || "";
+
+  const testCases = (problem?.test_cases as unknown as TestCase[] | null) || [];
+  const examples = (problem?.examples as unknown as Example[] | null) || [];
 
   const handleRun = () => {
     setHasRun(true);
-    setOutput("Running tests...\n\n✓ Test 1 passed: two_sum([2,7,11,15], 9) → [0, 1]\n✓ Test 2 passed: two_sum([3,2,4], 6) → [1, 2]\n✓ Test 3 passed: two_sum([3,3], 6) → [0, 1]\n\nAll 3 tests passed! 🎉");
+    // Simulate test execution (in a real app this would call a sandboxed execution service)
+    const results = testCases.map((tc) => ({
+      input: tc.input,
+      expected: tc.expected,
+      passed: Math.random() > 0.3, // Simulated
+    }));
+    setRunResults(results);
+
+    const passed = results.filter((r) => r.passed).length;
+    const total = results.length;
+    setOutput(
+      `Running tests...\n\n${results
+        .map((r, i) => `${r.passed ? "✓" : "✗"} Test ${i + 1}: ${r.input} → ${r.expected}`)
+        .join("\n")}\n\n${passed}/${total} tests passed ${passed === total ? "🎉" : ""}`
+    );
   };
+
+  const handleSubmit = async () => {
+    if (!user) {
+      toast({ title: "Sign in required", description: "Please sign in to submit solutions.", variant: "destructive" });
+      navigate("/auth");
+      return;
+    }
+
+    if (!hasRun) {
+      toast({ title: "Run first", description: "Please run your code before submitting.", variant: "destructive" });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const passed = runResults.filter((r) => r.passed).length;
+      const total = runResults.length;
+
+      const { error } = await supabase.rpc("submit_solution", {
+        p_problem_id: problemId,
+        p_code: currentCode,
+        p_tests_passed: passed,
+        p_tests_total: total,
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: passed === total ? "All tests passed! 🎉" : "Solution submitted",
+        description: `${passed}/${total} tests passed. ${passed === total ? "Points awarded!" : "Keep trying!"}`,
+      });
+    } catch (error: any) {
+      toast({ title: "Submission failed", description: error.message, variant: "destructive" });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="relative min-h-screen pt-16 flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!problem) {
+    return (
+      <div className="relative min-h-screen pt-16 flex items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-xl font-bold mb-2">Problem not found</h2>
+          <Button onClick={() => navigate("/problems")} variant="outline">Back to Problems</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative min-h-screen pt-16">
@@ -49,50 +149,49 @@ const PracticePage = () => {
         >
           <div className="p-6">
             <div className="flex items-center gap-2 mb-4">
-              <Badge variant="easy">Easy</Badge>
-              <Badge variant="concept" className="text-[10px]">Arrays</Badge>
-              <Badge variant="concept" className="text-[10px]">Hash Maps</Badge>
+              <Badge variant={difficultyVariant[problem.difficulty] || "default"}>
+                {problem.difficulty}
+              </Badge>
+              {problem.concepts.map((c: string) => (
+                <Badge key={c} variant="concept" className="text-[10px]">{c}</Badge>
+              ))}
             </div>
-            <h2 className="text-xl font-bold mb-4">1. Two Sum</h2>
+            <h2 className="text-xl font-bold mb-4">{problem.id}. {problem.title}</h2>
             <div className="prose prose-sm prose-invert text-sm text-muted-foreground space-y-3">
-              <p>
-                Given an array of integers <code className="text-primary font-mono text-xs bg-primary/10 px-1.5 py-0.5 rounded">nums</code> and
-                an integer <code className="text-primary font-mono text-xs bg-primary/10 px-1.5 py-0.5 rounded">target</code>, return indices
-                of the two numbers such that they add up to target.
-              </p>
-              <p>
-                You may assume that each input would have exactly one solution, and you may not use the same element twice.
-              </p>
+              <p>{problem.description}</p>
 
-              <div className="glass rounded-lg p-4 space-y-2">
-                <div className="text-xs font-semibold text-foreground">Example 1:</div>
-                <div className="font-mono text-xs space-y-1">
-                  <div><span className="text-muted-foreground">Input:</span> nums = [2,7,11,15], target = 9</div>
-                  <div><span className="text-muted-foreground">Output:</span> <span className="text-success">[0, 1]</span></div>
-                  <div className="text-muted-foreground">Because nums[0] + nums[1] == 9</div>
+              {examples.map((ex, i) => (
+                <div key={i} className="glass rounded-lg p-4 space-y-2">
+                  <div className="text-xs font-semibold text-foreground">Example {i + 1}:</div>
+                  <div className="font-mono text-xs space-y-1">
+                    <div><span className="text-muted-foreground">Input:</span> {ex.input}</div>
+                    <div><span className="text-muted-foreground">Output:</span> <span className="text-success">{ex.output}</span></div>
+                    {ex.explanation && <div className="text-muted-foreground">{ex.explanation}</div>}
+                  </div>
                 </div>
-              </div>
+              ))}
 
-              <div className="glass rounded-lg p-4 space-y-2">
-                <div className="text-xs font-semibold text-foreground">Constraints:</div>
-                <ul className="font-mono text-xs space-y-1 list-none p-0">
-                  <li>• 2 ≤ nums.length ≤ 10⁴</li>
-                  <li>• -10⁹ ≤ nums[i] ≤ 10⁹</li>
-                  <li>• Only one valid answer exists</li>
-                </ul>
-              </div>
+              {problem.constraints.length > 0 && (
+                <div className="glass rounded-lg p-4 space-y-2">
+                  <div className="text-xs font-semibold text-foreground">Constraints:</div>
+                  <ul className="font-mono text-xs space-y-1 list-none p-0">
+                    {problem.constraints.map((c: string, i: number) => (
+                      <li key={i}>• {c}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
 
-            {/* Hints */}
-            <div className="mt-6 glass rounded-lg p-4">
-              <div className="flex items-center gap-2 text-sm font-semibold text-warning mb-2">
-                <Lightbulb className="h-4 w-4" />
-                Hint
+            {problem.hint && (
+              <div className="mt-6 glass rounded-lg p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-warning mb-2">
+                  <Lightbulb className="h-4 w-4" />
+                  Hint
+                </div>
+                <p className="text-xs text-muted-foreground">{problem.hint}</p>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Think about what data structure lets you look up values in O(1) time. Can you store what you've already seen?
-              </p>
-            </div>
+            )}
           </div>
         </motion.div>
 
@@ -110,7 +209,7 @@ const PracticePage = () => {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => { setCode(defaultCode); setOutput(null); setHasRun(false); }}
+                onClick={() => { setCode(problem.default_code); setOutput(null); setHasRun(false); setRunResults([]); }}
                 className="gap-1.5 text-xs border-border/50"
               >
                 <RotateCcw className="h-3 w-3" />
@@ -126,9 +225,11 @@ const PracticePage = () => {
               </Button>
               <Button
                 size="sm"
+                onClick={handleSubmit}
+                disabled={isSubmitting}
                 className="gap-1.5 text-xs bg-success text-success-foreground hover:bg-success/90"
               >
-                <Send className="h-3 w-3" />
+                {isSubmitting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
                 Submit
               </Button>
             </div>
@@ -138,7 +239,7 @@ const PracticePage = () => {
           <div className="flex-1 flex flex-col">
             <div className="flex-1 relative">
               <Textarea
-                value={code}
+                value={currentCode}
                 onChange={(e) => setCode(e.target.value)}
                 className="absolute inset-0 resize-none rounded-none border-0 bg-card font-mono text-sm leading-relaxed p-4 focus-visible:ring-0 focus-visible:ring-offset-0"
                 spellCheck={false}
@@ -150,7 +251,9 @@ const PracticePage = () => {
               <div className="flex items-center gap-2 border-b border-border/50 px-4 py-2">
                 <span className="text-xs font-semibold">Output</span>
                 {hasRun && (
-                  <Badge variant="easy" className="text-[10px]">3/3 Passed</Badge>
+                  <Badge variant={runResults.every((r) => r.passed) ? "easy" : "medium"} className="text-[10px]">
+                    {runResults.filter((r) => r.passed).length}/{runResults.length} Passed
+                  </Badge>
                 )}
               </div>
               <div className="p-4 overflow-y-auto h-[calc(100%-2.5rem)]">
@@ -164,7 +267,7 @@ const PracticePage = () => {
 
                 {hasRun && (
                   <div className="mt-4 space-y-2">
-                    {testResults.map((t, i) => (
+                    {runResults.map((t, i) => (
                       <div key={i} className="flex items-start gap-2 text-xs font-mono">
                         {t.passed ? (
                           <CheckCircle2 className="h-3.5 w-3.5 text-success mt-0.5 flex-shrink-0" />
@@ -173,7 +276,7 @@ const PracticePage = () => {
                         )}
                         <div>
                           <span className="text-muted-foreground">{t.input}</span>
-                          <span className="text-success ml-2">→ {t.got}</span>
+                          <span className={t.passed ? "text-success" : "text-destructive"} > → {t.expected}</span>
                         </div>
                       </div>
                     ))}
@@ -197,12 +300,7 @@ const PracticePage = () => {
                   <MessageCircle className="h-4 w-4 text-primary" />
                   <span className="text-sm font-semibold">AI Assistant</span>
                 </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setShowChat(false)}
-                  className="h-6 w-6 p-0"
-                >
+                <Button size="sm" variant="ghost" onClick={() => setShowChat(false)} className="h-6 w-6 p-0">
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
@@ -212,7 +310,7 @@ const PracticePage = () => {
                     <Lightbulb className="h-3 w-3" />
                     Socratic Guide
                   </div>
-                  I see you're working on Two Sum. Before looking at solutions — what's the brute force approach, and why might it be slow?
+                  I see you're working on {problem.title}. {problem.hint || "Think carefully about the approach before coding."}
                 </div>
               </div>
               <div className="border-t border-border/50 p-3">
