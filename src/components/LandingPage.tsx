@@ -83,17 +83,17 @@ const LandingPage = () => {
             </p>
 
             <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
-              <Link to="/problems">
-                <Button size="lg" className="gradient-primary text-primary-foreground font-semibold glow-primary gap-2 px-8 h-12 text-base">
+              <Button size="lg" className="gradient-primary text-primary-foreground font-semibold glow-primary gap-2 px-8 h-12 text-base" asChild>
+                <Link to="/problems">
                   Start Practicing
                   <ArrowRight className="h-4 w-4" />
-                </Button>
-              </Link>
-              <Link to="/leaderboard">
-                <Button size="lg" variant="outline" className="gap-2 h-12 text-base border-border/50 hover:bg-secondary">
+                </Link>
+              </Button>
+              <Button size="lg" variant="outline" className="gap-2 h-12 text-base border-border/50 hover:bg-secondary" asChild>
+                <Link to="/leaderboard">
                   View Leaderboard
-                </Button>
-              </Link>
+                </Link>
+              </Button>
             </div>
           </motion.div>
 
@@ -207,12 +207,12 @@ const LandingPage = () => {
             <p className="mx-auto mb-8 max-w-md text-muted-foreground">
               Join thousands of developers mastering programming through intelligent, adaptive practice.
             </p>
-            <Link to="/problems">
-              <Button size="lg" className="gradient-primary text-primary-foreground font-semibold glow-primary gap-2 px-8 h-12 text-base">
+            <Button size="lg" className="gradient-primary text-primary-foreground font-semibold glow-primary gap-2 px-8 h-12 text-base" asChild>
+              <Link to="/problems">
                 Start Your Journey
                 <ArrowRight className="h-4 w-4" />
-              </Button>
-            </Link>
+              </Link>
+            </Button>
           </motion.div>
         </div>
       </section>
