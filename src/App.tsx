@@ -8,6 +8,7 @@ import Index from "./pages/Index";
 import Problems from "./pages/Problems";
 import Practice from "./pages/Practice";
 import Leaderboard from "./pages/Leaderboard";
+import Profile from "./pages/Profile";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 import Navbar from "@/components/Navbar";
@@ -35,6 +36,7 @@ const App = () => (
             <Route path="/practice/:id" element={<WithNav><Practice /></WithNav>} />
             <Route path="/practice" element={<WithNav><Practice /></WithNav>} />
             <Route path="/leaderboard" element={<WithNav><Leaderboard /></WithNav>} />
+            <Route path="/profile" element={<WithNav><Profile /></WithNav>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
