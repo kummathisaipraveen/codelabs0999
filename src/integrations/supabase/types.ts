@@ -14,6 +14,84 @@ export type Database = {
   }
   public: {
     Tables: {
+      badges: {
+        Row: {
+          condition_type: string
+          condition_value: number
+          created_at: string
+          description: string
+          icon: string
+          id: number
+          name: string
+        }
+        Insert: {
+          condition_type: string
+          condition_value?: number
+          created_at?: string
+          description: string
+          icon?: string
+          id?: number
+          name: string
+        }
+        Update: {
+          condition_type?: string
+          condition_value?: number
+          created_at?: string
+          description?: string
+          icon?: string
+          id?: number
+          name?: string
+        }
+        Relationships: []
+      }
+      problems: {
+        Row: {
+          concepts: string[]
+          constraints: string[]
+          created_at: string
+          default_code: string
+          description: string
+          difficulty: string
+          examples: Json
+          hint: string | null
+          id: number
+          test_cases: Json
+          time_estimate: string
+          title: string
+          type: string
+        }
+        Insert: {
+          concepts?: string[]
+          constraints?: string[]
+          created_at?: string
+          default_code?: string
+          description?: string
+          difficulty: string
+          examples?: Json
+          hint?: string | null
+          id?: number
+          test_cases?: Json
+          time_estimate?: string
+          title: string
+          type?: string
+        }
+        Update: {
+          concepts?: string[]
+          constraints?: string[]
+          created_at?: string
+          default_code?: string
+          description?: string
+          difficulty?: string
+          examples?: Json
+          hint?: string | null
+          id?: number
+          test_cases?: Json
+          time_estimate?: string
+          title?: string
+          type?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -41,12 +119,126 @@ export type Database = {
         }
         Relationships: []
       }
+      submissions: {
+        Row: {
+          code: string
+          created_at: string
+          feedback: string | null
+          id: string
+          problem_id: number
+          score: number
+          tests_passed: number
+          tests_total: number
+          user_id: string
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          feedback?: string | null
+          id?: string
+          problem_id: number
+          score?: number
+          tests_passed?: number
+          tests_total?: number
+          user_id: string
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          feedback?: string | null
+          id?: string
+          problem_id?: number
+          score?: number
+          tests_passed?: number
+          tests_total?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "submissions_problem_id_fkey"
+            columns: ["problem_id"]
+            isOneToOne: false
+            referencedRelation: "problems"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      user_badges: {
+        Row: {
+          badge_id: number
+          earned_at: string
+          id: string
+          user_id: string
+        }
+        Insert: {
+          badge_id: number
+          earned_at?: string
+          id?: string
+          user_id: string
+        }
+        Update: {
+          badge_id?: number
+          earned_at?: string
+          id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_badges_badge_id_fkey"
+            columns: ["badge_id"]
+            isOneToOne: false
+            referencedRelation: "badges"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      user_points: {
+        Row: {
+          current_streak: number
+          id: string
+          last_solved_at: string | null
+          longest_streak: number
+          problems_solved: number
+          total_points: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          current_streak?: number
+          id?: string
+          last_solved_at?: string | null
+          longest_streak?: number
+          problems_solved?: number
+          total_points?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          current_streak?: number
+          id?: string
+          last_solved_at?: string | null
+          longest_streak?: number
+          problems_solved?: number
+          total_points?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      submit_solution: {
+        Args: {
+          p_code: string
+          p_problem_id: number
+          p_tests_passed: number
+          p_tests_total: number
+        }
+        Returns: string
+      }
     }
     Enums: {
       [_ in never]: never
