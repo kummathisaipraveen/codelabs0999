@@ -33,16 +33,18 @@ const Navbar = () => {
           {navItems.map(({ to, label, icon: Icon }) => {
             const isActive = location.pathname === to;
             return (
-              <Link key={to} to={to}>
-                <Button
-                  variant={isActive ? "secondary" : "ghost"}
-                  size="sm"
-                  className={`gap-2 text-sm ${isActive ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
-                >
+              <Button
+                key={to}
+                variant={isActive ? "secondary" : "ghost"}
+                size="sm"
+                className={`gap-2 text-sm ${isActive ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
+                asChild
+              >
+                <Link to={to}>
                   <Icon className="h-4 w-4" />
                   <span className="hidden sm:inline">{label}</span>
-                </Button>
-              </Link>
+                </Link>
+              </Button>
             );
           })}
         </div>
