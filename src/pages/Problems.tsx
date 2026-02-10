@@ -1,37 +1,16 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
-import { Search, Filter, Clock, Code2, ArrowRight } from "lucide-react";
+import { Search, Filter, Clock, ArrowRight, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
 
 type Difficulty = "Easy" | "Medium" | "Hard";
 
-interface Problem {
-  id: number;
-  title: string;
-  difficulty: Difficulty;
-  concepts: string[];
-  type: string;
-  completionRate: number;
-  timeEstimate: string;
-}
-
-const problems: Problem[] = [
-  { id: 1, title: "Two Sum", difficulty: "Easy", concepts: ["Arrays", "Hash Maps"], type: "Implementation", completionRate: 87, timeEstimate: "15 min" },
-  { id: 2, title: "Reverse Linked List", difficulty: "Easy", concepts: ["Linked Lists", "Pointers"], type: "Implementation", completionRate: 78, timeEstimate: "20 min" },
-  { id: 3, title: "Valid Parentheses", difficulty: "Easy", concepts: ["Stacks", "Strings"], type: "Implementation", completionRate: 82, timeEstimate: "15 min" },
-  { id: 4, title: "Binary Tree Inorder", difficulty: "Medium", concepts: ["Trees", "Recursion"], type: "Traversal", completionRate: 64, timeEstimate: "25 min" },
-  { id: 5, title: "Longest Substring", difficulty: "Medium", concepts: ["Sliding Window", "Hash Maps"], type: "Optimization", completionRate: 55, timeEstimate: "30 min" },
-  { id: 6, title: "Merge Intervals", difficulty: "Medium", concepts: ["Arrays", "Sorting"], type: "Implementation", completionRate: 60, timeEstimate: "25 min" },
-  { id: 7, title: "Word Search", difficulty: "Medium", concepts: ["Backtracking", "Matrices"], type: "Search", completionRate: 48, timeEstimate: "35 min" },
-  { id: 8, title: "Trapping Rain Water", difficulty: "Hard", concepts: ["Two Pointers", "Dynamic Programming"], type: "Optimization", completionRate: 32, timeEstimate: "45 min" },
-  { id: 9, title: "Serialize Binary Tree", difficulty: "Hard", concepts: ["Trees", "Design"], type: "Design", completionRate: 28, timeEstimate: "40 min" },
-  { id: 10, title: "LRU Cache", difficulty: "Hard", concepts: ["Design", "Hash Maps"], type: "Design", completionRate: 35, timeEstimate: "45 min" },
-];
-
-const difficultyVariant: Record<Difficulty, "easy" | "medium" | "hard"> = {
+const difficultyVariant: Record<string, "easy" | "medium" | "hard"> = {
   Easy: "easy",
   Medium: "medium",
   Hard: "hard",
@@ -41,9 +20,22 @@ const ProblemsPage = () => {
   const [search, setSearch] = useState("");
   const [filterDifficulty, setFilterDifficulty] = useState<Difficulty | "All">("All");
 
+  const { data: problems = [], isLoading } = useQuery({
+    queryKey: ["problems"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("problems")
+        .select("id, title, difficulty, concepts, type, time_estimate")
+        .order("id");
+      if (error) throw error;
+      return data;
+    },
+  });
+
   const filtered = problems.filter((p) => {
-    const matchesSearch = p.title.toLowerCase().includes(search.toLowerCase()) ||
-      p.concepts.some((c) => c.toLowerCase().includes(search.toLowerCase()));
+    const matchesSearch =
+      p.title.toLowerCase().includes(search.toLowerCase()) ||
+      p.concepts.some((c: string) => c.toLowerCase().includes(search.toLowerCase()));
     const matchesDifficulty = filterDifficulty === "All" || p.difficulty === filterDifficulty;
     return matchesSearch && matchesDifficulty;
   });
@@ -98,54 +90,61 @@ const ProblemsPage = () => {
         </motion.div>
 
         {/* Problem list */}
-        <div className="space-y-3">
-          {filtered.map((problem, i) => (
-            <motion.div
-              key={problem.id}
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.05 }}
-            >
-              <Link to="/practice" className="block">
-                <div className="glass rounded-xl p-5 transition-all duration-200 hover:border-primary/30 hover:glow-primary group cursor-pointer">
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <span className="text-xs font-mono text-muted-foreground">#{problem.id}</span>
-                        <h3 className="font-semibold group-hover:text-primary transition-colors">
-                          {problem.title}
-                        </h3>
-                        <Badge variant={difficultyVariant[problem.difficulty]}>
-                          {problem.difficulty}
-                        </Badge>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="flex gap-1.5">
-                          {problem.concepts.map((c) => (
-                            <Badge key={c} variant="concept" className="text-[10px]">{c}</Badge>
-                          ))}
+        {isLoading ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filtered.map((problem, i) => (
+              <motion.div
+                key={problem.id}
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: i * 0.05 }}
+              >
+                <Link to={`/practice/${problem.id}`} className="block">
+                  <div className="glass rounded-xl p-5 transition-all duration-200 hover:border-primary/30 hover:glow-primary group cursor-pointer">
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <span className="text-xs font-mono text-muted-foreground">#{problem.id}</span>
+                          <h3 className="font-semibold group-hover:text-primary transition-colors">
+                            {problem.title}
+                          </h3>
+                          <Badge variant={difficultyVariant[problem.difficulty] || "default"}>
+                            {problem.difficulty}
+                          </Badge>
                         </div>
-                        <span className="text-xs text-muted-foreground flex items-center gap-1">
-                          <Clock className="h-3 w-3" />
-                          {problem.timeEstimate}
-                        </span>
+                        <div className="flex items-center gap-3">
+                          <div className="flex gap-1.5">
+                            {problem.concepts.map((c: string) => (
+                              <Badge key={c} variant="concept" className="text-[10px]">{c}</Badge>
+                            ))}
+                          </div>
+                          <span className="text-xs text-muted-foreground flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {problem.time_estimate}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <div className="hidden sm:block text-right">
-                        <div className="text-sm font-semibold">{problem.completionRate}%</div>
-                        <div className="text-[10px] text-muted-foreground">completion</div>
-                      </div>
-                      <div className="h-8 w-8 flex items-center justify-center rounded-lg bg-secondary text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-colors">
-                        <ArrowRight className="h-4 w-4" />
+                      <div className="flex items-center gap-4">
+                        <div className="h-8 w-8 flex items-center justify-center rounded-lg bg-secondary text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-colors">
+                          <ArrowRight className="h-4 w-4" />
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              </Link>
-            </motion.div>
-          ))}
-        </div>
+                </Link>
+              </motion.div>
+            ))}
+            {filtered.length === 0 && (
+              <div className="text-center py-12 text-muted-foreground">
+                No problems found matching your search.
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
