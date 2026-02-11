@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Code2, Trophy, BookOpen, Terminal, LogOut, User } from "lucide-react";
+import { Code2, Trophy, BookOpen, Terminal, LogOut, User, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -72,6 +72,12 @@ const Navbar = () => {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem asChild>
+                <Link to="/dashboard" className="flex items-center">
+                  <LayoutDashboard className="h-3 w-3 mr-2" />
+                  Dashboard
+                </Link>
+              </DropdownMenuItem>
               <DropdownMenuItem asChild>
                 <Link to="/profile" className="flex items-center">
                   <User className="h-3 w-3 mr-2" />
