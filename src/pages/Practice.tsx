@@ -61,6 +61,7 @@ const PracticePage = () => {
   const [hasRun, setHasRun] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [runResults, setRunResults] = useState<{ input: string; expected: string; passed: boolean }[]>([]);
+  const [serverResponse, setServerResponse] = useState<{ tests_passed: number; tests_total: number; score: number; submission_id: string } | null>(null);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -165,23 +166,60 @@ const PracticePage = () => {
   const testCases = (problem?.test_cases as unknown as TestCase[] | null) || [];
   const examples = (problem?.examples as unknown as Example[] | null) || [];
 
-  const handleRun = () => {
-    setHasRun(true);
-    // Simulate test execution (in a real app this would call a sandboxed execution service)
-    const results = testCases.map((tc) => ({
-      input: tc.input,
-      expected: tc.expected,
-      passed: Math.random() > 0.3, // Simulated
-    }));
-    setRunResults(results);
+  const handleRun = async () => {
+    if (!user) {
+      toast({ title: "Sign in required", description: "Please sign in to run code.", variant: "destructive" });
+      navigate("/auth");
+      return;
+    }
 
-    const passed = results.filter((r) => r.passed).length;
-    const total = results.length;
-    setOutput(
-      `Running tests...\n\n${results
-        .map((r, i) => `${r.passed ? "✓" : "✗"} Test ${i + 1}: ${r.input} → ${r.expected}`)
-        .join("\n")}\n\n${passed}/${total} tests passed ${passed === total ? "🎉" : ""}`
-    );
+    setHasRun(true);
+    setOutput("Running tests on server...");
+    setRunResults([]);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error("Please sign in to run code.");
+      }
+
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/execute-code`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          },
+          body: JSON.stringify({
+            problem_id: problemId,
+            code: currentCode,
+          }),
+        }
+      );
+
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        throw new Error(data.error || `Server error ${resp.status}`);
+      }
+
+      const results = data.results as { input: string; expected: string; actual: string; passed: boolean }[];
+      setRunResults(results.map((r) => ({ input: r.input, expected: r.expected, passed: r.passed })));
+      setServerResponse(data);
+
+      const passed = data.tests_passed;
+      const total = data.tests_total;
+      setOutput(
+        `Server-verified results:\n\n${results
+          .map((r, i) => `${r.passed ? "✓" : "✗"} Test ${i + 1}: ${r.input} → expected ${r.expected}, got ${r.actual}`)
+          .join("\n")}\n\n${passed}/${total} tests passed ${passed === total ? "🎉" : ""}`
+      );
+    } catch (e: any) {
+      setOutput(`Error: ${e.message}`);
+      toast({ title: "Execution failed", description: e.message, variant: "destructive" });
+    }
   };
 
   const handleSubmit = async () => {
@@ -191,34 +229,19 @@ const PracticePage = () => {
       return;
     }
 
-    if (!hasRun) {
+    if (!hasRun || !serverResponse) {
       toast({ title: "Run first", description: "Please run your code before submitting.", variant: "destructive" });
       return;
     }
 
-    setIsSubmitting(true);
-    try {
-      const passed = runResults.filter((r) => r.passed).length;
-      const total = runResults.length;
+    // Results are already submitted server-side during execution
+    const passed = serverResponse.tests_passed;
+    const total = serverResponse.tests_total;
 
-      const { error } = await supabase.rpc("submit_solution", {
-        p_problem_id: problemId,
-        p_code: currentCode,
-        p_tests_passed: passed,
-        p_tests_total: total,
-      });
-
-      if (error) throw error;
-
-      toast({
-        title: passed === total ? "All tests passed! 🎉" : "Solution submitted",
-        description: `${passed}/${total} tests passed. ${passed === total ? "Points awarded!" : "Keep trying!"}`,
-      });
-    } catch (error: any) {
-      toast({ title: "Submission failed", description: error.message, variant: "destructive" });
-    } finally {
-      setIsSubmitting(false);
-    }
+    toast({
+      title: passed === total ? "All tests passed! 🎉" : "Solution submitted",
+      description: `${passed}/${total} tests passed. ${passed === total ? "Points awarded!" : "Keep trying!"}`,
+    });
   };
 
   if (isLoading) {
