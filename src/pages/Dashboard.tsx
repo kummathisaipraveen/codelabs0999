@@ -1,19 +1,34 @@
 import { useAuth } from "@/contexts/AuthContext";
 import { useUserRole } from "@/hooks/useUserRole";
-import { useNavigate } from "react-router-dom";
-import { useEffect } from "react";
-import StudentDashboard from "./StudentDashboard";
-import TeacherDashboard from "./TeacherDashboard";
-import RecruiterDashboard from "./RecruiterDashboard";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import StudentDashboard from "./dashboards/StudentDashboard";
+import TeacherDashboard from "./dashboards/TeacherDashboard";
+import RecruiterDashboard from "./dashboards/RecruiterDashboard";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const Dashboard = () => {
   const { user, loading } = useAuth();
   const { primaryRole, isLoading: roleLoading } = useUserRole();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const [showResetDialog, setShowResetDialog] = useState(false);
 
   useEffect(() => {
     if (!loading && !user) navigate("/auth");
-  }, [user, loading, navigate]);
+    if (searchParams.get("reset") === "true") {
+      setShowResetDialog(true);
+    }
+  }, [user, loading, navigate, searchParams]);
 
   if (loading || roleLoading) {
     return (
@@ -23,14 +38,42 @@ const Dashboard = () => {
     );
   }
 
+  let content;
   switch (primaryRole) {
     case "teacher":
-      return <TeacherDashboard />;
+      content = <TeacherDashboard />;
+      break;
     case "recruiter":
-      return <RecruiterDashboard />;
+      content = <RecruiterDashboard />;
+      break;
     default:
-      return <StudentDashboard />;
+      content = <StudentDashboard />;
   }
+
+  return (
+    <>
+      {content}
+      <AlertDialog open={showResetDialog} onOpenChange={setShowResetDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Change your password?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You've logged in with a temporary code. Would you like to update your password now to keep your account secure?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Later</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => navigate("/update-password")}
+              className="gradient-primary text-primary-foreground"
+            >
+              Update Password
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
 };
 
 export default Dashboard;

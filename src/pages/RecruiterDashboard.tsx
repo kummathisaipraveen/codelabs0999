@@ -10,11 +10,25 @@ import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
 import { useUserRole } from "@/hooks/useUserRole";
 
+interface BadgeEntry {
+  user_id: string;
+  badges?: { name: string; icon: string };
+}
+
+interface Candidate {
+  user_id: string;
+  total_points: number;
+  problems_solved: number;
+  current_streak: number;
+  profile?: { display_name: string | null; avatar_url: string | null } | null;
+  badges: BadgeEntry[];
+}
+
 const RecruiterDashboard = () => {
   const { user } = useAuth();
-  const { hasRole, isLoading: roleLoading } = useUserRole();
+  const { primaryRole, isLoading: roleLoading } = useUserRole();
   const navigate = useNavigate();
-  const [candidates, setCandidates] = useState<any[]>([]);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [search, setSearch] = useState("");
   const [minPoints, setMinPoints] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -22,7 +36,7 @@ const RecruiterDashboard = () => {
   useEffect(() => {
     if (roleLoading) return;
     if (!user) { navigate("/auth"); return; }
-    if (!hasRole("recruiter")) { navigate("/dashboard"); return; }
+    if (primaryRole !== "recruiter") { navigate("/dashboard"); return; }
 
     const fetchData = async () => {
       const [profilesRes, pointsRes, badgesRes] = await Promise.all([
@@ -32,7 +46,7 @@ const RecruiterDashboard = () => {
       ]);
 
       const profileMap = new Map((profilesRes.data || []).map((p) => [p.user_id, p]));
-      const badgeMap = new Map<string, any[]>();
+      const badgeMap = new Map<string, BadgeEntry[]>();
       (badgesRes.data || []).forEach((ub) => {
         const list = badgeMap.get(ub.user_id) || [];
         list.push(ub);
@@ -49,7 +63,7 @@ const RecruiterDashboard = () => {
       setLoading(false);
     };
     fetchData();
-  }, [user, navigate, hasRole, roleLoading]);
+  }, [user, navigate, primaryRole, roleLoading]);
 
   if (loading || roleLoading) return <div className="min-h-screen pt-20 flex items-center justify-center"><div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
 
@@ -140,7 +154,7 @@ const RecruiterDashboard = () => {
                         <span className="text-xs text-muted-foreground flex items-center gap-1"><Flame className="h-3 w-3 text-orange-500" />{candidate.current_streak} streak</span>
                         {candidate.badges.length > 0 && (
                           <div className="flex gap-0.5">
-                            {candidate.badges.slice(0, 3).map((b: any, j: number) => (
+                            {candidate.badges.slice(0, 3).map((b: BadgeEntry, j: number) => (
                               <span key={j} className="text-xs">{b.badges?.icon || "🏆"}</span>
                             ))}
                             {candidate.badges.length > 3 && <span className="text-xs text-muted-foreground">+{candidate.badges.length - 3}</span>}

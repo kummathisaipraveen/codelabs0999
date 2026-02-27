@@ -12,6 +12,12 @@ const badgesList = [
   { name: "Recursion Guru", description: "Solved 10 recursive problems", icon: "🔄" },
 ];
 
+interface BadgeItem {
+  name: string;
+  description: string;
+  icon: string;
+}
+
 const RankIcon = ({ rank }: { rank: number }) => {
   if (rank === 1) return <Crown className="h-5 w-5 text-warning" />;
   if (rank === 2) return <Medal className="h-5 w-5 text-muted-foreground" />;
@@ -192,7 +198,7 @@ const LeaderboardPage = () => {
                 Achievements
               </h3>
               <div className="grid grid-cols-2 lg:grid-cols-1 gap-3">
-                {(badges.length > 0 ? badges : badgesList).map((badge: any) => (
+                {(badges.length > 0 ? badges : badgesList).map((badge: BadgeItem) => (
                   <div
                     key={badge.name}
                     className="glass rounded-xl p-4 flex items-center gap-3 hover:border-primary/30 transition-colors"

@@ -11,8 +11,10 @@ import Leaderboard from "./pages/Leaderboard";
 import Profile from "./pages/Profile";
 import Dashboard from "./pages/Dashboard";
 import Auth from "./pages/Auth";
+import UpdatePassword from "./pages/UpdatePassword";
 import NotFound from "./pages/NotFound";
 import Navbar from "@/components/Navbar";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
 
 const queryClient = new QueryClient();
 
@@ -33,13 +35,14 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
-            <Route path="/problems" element={<WithNav><Problems /></WithNav>} />
-            <Route path="/practice/:id" element={<WithNav><Practice /></WithNav>} />
-            <Route path="/practice" element={<WithNav><Practice /></WithNav>} />
-            <Route path="/leaderboard" element={<WithNav><Leaderboard /></WithNav>} />
-            <Route path="/profile" element={<WithNav><Profile /></WithNav>} />
-            <Route path="/dashboard" element={<WithNav><Dashboard /></WithNav>} />
-            <Route path="*" element={<NotFound />} />
+            <Route path="/problems" element={<ProtectedRoute><WithNav><Problems /></WithNav></ProtectedRoute>} />
+            <Route path="/practice/:id" element={<ProtectedRoute><WithNav><Practice /></WithNav></ProtectedRoute>} />
+            <Route path="/practice" element={<ProtectedRoute><WithNav><Practice /></WithNav></ProtectedRoute>} />
+            <Route path="/leaderboard" element={<ProtectedRoute><WithNav><Leaderboard /></WithNav></ProtectedRoute>} />
+            <Route path="/profile" element={<ProtectedRoute><WithNav><Profile /></WithNav></ProtectedRoute>} />
+            <Route path="/dashboard" element={<ProtectedRoute><WithNav><Dashboard /></WithNav></ProtectedRoute>} />
+            <Route path="/update-password" element={<ProtectedRoute><UpdatePassword /></ProtectedRoute>} />
+            <Route path="*" element={<WithNav><NotFound /></WithNav>} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>

@@ -1,0 +1,8 @@
+# Use a slim Python image
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Command to run (will be overridden by the runner)
+CMD ["python3"]

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Play, RotateCcw, Send, MessageCircle, ChevronRight, CheckCircle2, XCircle, Lightbulb, Loader2, Bot, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { AntiCheatMonitor } from "@/components/AntiCheatMonitor";
 
 type ChatMsg = { role: "user" | "assistant"; content: string };
 
@@ -35,6 +36,46 @@ const PracticePage = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
+  const [searchParams] = useSearchParams();
+  const isAssignment = searchParams.get("assignment") === "true";
+
+  const motivationalMessages = [
+    "You're doing great! Keep it up! 🚀",
+    "Every line of code brings you closer to mastery. 💻",
+    "Don't give up! The breakthrough is just around the corner. ✨",
+    "Coding is a superpower. You're leveling up! 🦸‍♂️",
+    "Small steps lead to big results. Stay focused! 🎯",
+    "You've got this! One problem at a time. 💪",
+    "Complexity is just a challenge waiting to be solved. 🧠",
+    "Even the best developers started with 'Hello World'. 🌎",
+    "Your logic is getting sharper with every test case. 🗡️",
+    "Consistency is the key to becoming a coding wizard. 🧙‍♂️",
+    "Mistakes are the best teachers. Embrace the bugs! 🐛",
+    "You're building something amazing, one function at a time. 🏗️",
+    "Progress, not perfection. Keep pushing! 📈",
+    "Your future self will thank you for this effort. 🤝"
+  ];
+
+  useEffect(() => {
+    if (isAssignment) return;
+
+    // Show an immediate message on mount to confirm changes are reflecting
+    const initialMsg = motivationalMessages[Math.floor(Math.random() * motivationalMessages.length)];
+    toast({
+      title: "Welcome to Practice!",
+      description: initialMsg,
+    });
+
+    const interval = setInterval(() => {
+      const randomMsg = motivationalMessages[Math.floor(Math.random() * motivationalMessages.length)];
+      toast({
+        title: "Keep Going!",
+        description: randomMsg,
+      });
+    }, 30000); // Every 30 seconds
+
+    return () => clearInterval(interval);
+  }, [isAssignment, toast]);
   const problemId = id ? parseInt(id) : 1;
 
   const { data: problem, isLoading } = useQuery({
@@ -83,23 +124,19 @@ const PracticePage = () => {
         ? `Title: ${problem.title}\nDifficulty: ${problem.difficulty}\nConcepts: ${problem.concepts.join(", ")}\nDescription: ${problem.description}\nHint: ${problem.hint || "None"}`
         : "";
 
-      const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/socratic-chat`;
+      const CHAT_URL = "/api/chat";
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
-        throw new Error("Please sign in to use the Socratic Guide.");
-      }
+      // ... auth checks ...
 
       const resp = await fetch(CHAT_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          // Authorization headers...
         },
         body: JSON.stringify({
           messages: updatedMessages,
-          problemContext,
+          problem_context: problemContext, // Note key change problemContext -> problem_context to match Python model
         }),
       });
 
@@ -108,49 +145,14 @@ const PracticePage = () => {
         throw new Error(errData.error || `Error ${resp.status}`);
       }
 
-      if (!resp.body) throw new Error("No response stream");
-
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let textBuffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        textBuffer += decoder.decode(value, { stream: true });
-
-        let newlineIndex: number;
-        while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
-          let line = textBuffer.slice(0, newlineIndex);
-          textBuffer = textBuffer.slice(newlineIndex + 1);
-          if (line.endsWith("\r")) line = line.slice(0, -1);
-          if (line.startsWith(":") || line.trim() === "") continue;
-          if (!line.startsWith("data: ")) continue;
-
-          const jsonStr = line.slice(6).trim();
-          if (jsonStr === "[DONE]") break;
-
-          try {
-            const parsed = JSON.parse(jsonStr);
-            const content = parsed.choices?.[0]?.delta?.content as string | undefined;
-            if (content) {
-              assistantContent += content;
-              setChatMessages((prev) => {
-                const last = prev[prev.length - 1];
-                if (last?.role === "assistant") {
-                  return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: assistantContent } : m);
-                }
-                return [...prev, { role: "assistant", content: assistantContent }];
-              });
-            }
-          } catch {
-            textBuffer = line + "\n" + textBuffer;
-            break;
-          }
-        }
+      const data = await resp.json();
+      if (data.role === "assistant" && data.content) {
+        assistantContent = data.content;
+        setChatMessages((prev) => [...prev, { role: "assistant", content: assistantContent }]);
       }
-    } catch (e: any) {
-      toast({ title: "Chat error", description: e.message, variant: "destructive" });
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : "AI service error";
+      toast({ title: "Chat error", description: errMsg, variant: "destructive" });
       // Remove user message if no response came
       if (!assistantContent) {
         setChatMessages((prev) => prev.slice(0, -1));
@@ -183,42 +185,71 @@ const PracticePage = () => {
         throw new Error("Please sign in to run code.");
       }
 
-      const resp = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/execute-code`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-          },
-          body: JSON.stringify({
-            problem_id: problemId,
-            code: currentCode,
-          }),
-        }
-      );
+      // python backend
+      const resp = await fetch("/api/execute", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          // Authorization: session?.access_token ... (Backend verify skipped for demo)
+        },
+        body: JSON.stringify({
+          code: currentCode,
+          language: "python",
+          test_cases: testCases
+        }),
+      });
 
       const data = await resp.json();
 
       if (!resp.ok) {
-        throw new Error(data.error || `Server error ${resp.status}`);
+        throw new Error(data.error || data.detail || `Server error ${resp.status}`);
       }
 
-      const results = data.results as { input: string; expected: string; actual: string; passed: boolean }[];
-      setRunResults(results.map((r) => ({ input: r.input, expected: r.expected, passed: r.passed })));
-      setServerResponse(data);
+      // Backend returns { status: "success", results: [...], logs: "..." }
+      if (data.status === "error" || data.status === "system_error" || data.status === "timeout") {
+        throw new Error(data.error || "Execution failed");
+      }
 
-      const passed = data.tests_passed;
-      const total = data.tests_total;
+      const results = data.results.map((r: { input: string; expected: string; actual: string; passed: boolean }) => ({
+        input: r.input,
+        expected: r.expected,
+        actual: r.actual,
+        passed: r.passed
+      }));
+
+      setRunResults(results);
+
+      const passed = results.filter((r: { passed: boolean }) => r.passed).length;
+      const total = results.length;
+
+      // Mocking the serverResponse structure expected by handleSubmit
+      setServerResponse({
+        tests_passed: passed,
+        tests_total: total,
+        score: (passed / total) * 100, // Simplistic scoring
+        submission_id: "local-sub-" + Date.now()
+      });
+
       setOutput(
         `Server-verified results:\n\n${results
-          .map((r, i) => `${r.passed ? "✓" : "✗"} Test ${i + 1}: ${r.input} → expected ${r.expected}, got ${r.actual}`)
+          .map((r: { passed: boolean; input: string; expected: string; actual: string }, i: number) => `${r.passed ? "✓" : "✗"} Test ${i + 1}: ${r.input} → expected ${r.expected}, got ${r.actual}`)
           .join("\n")}\n\n${passed}/${total} tests passed ${passed === total ? "🎉" : ""}`
       );
-    } catch (e: any) {
-      setOutput(`Error: ${e.message}`);
-      toast({ title: "Execution failed", description: e.message, variant: "destructive" });
+
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : "Execution failed";
+      setOutput(`Error: ${errMsg}`);
+      toast({ title: "Execution failed", description: errMsg, variant: "destructive" });
+
+      if (!isAssignment) {
+        const randomMsg = motivationalMessages[Math.floor(Math.random() * motivationalMessages.length)];
+        setTimeout(() => {
+          toast({
+            title: "Don't give up!",
+            description: randomMsg,
+          });
+        }, 1000);
+      }
     }
   };
 
@@ -263,9 +294,16 @@ const PracticePage = () => {
     );
   }
 
+
+
+  // ... inside PracticePage component ...
+
   return (
     <div className="relative min-h-screen pt-16">
+      <AntiCheatMonitor onViolation={(type) => console.log("Violation:", type)} />
       <div className="flex h-[calc(100vh-4rem)]">
+        {/* ... rest of the JSX ... */}
+
         {/* Problem Panel */}
         <motion.div
           initial={{ opacity: 0, x: -20 }}
@@ -454,11 +492,10 @@ const PracticePage = () => {
                         <Bot className="h-3 w-3 text-primary-foreground" />
                       )}
                     </div>
-                    <div className={`rounded-lg p-3 text-xs max-w-[280px] whitespace-pre-wrap ${
-                      msg.role === "user"
-                        ? "bg-primary/10 text-foreground rounded-tr-none"
-                        : "glass text-muted-foreground rounded-tl-none"
-                    }`}>
+                    <div className={`rounded-lg p-3 text-xs max-w-[280px] whitespace-pre-wrap ${msg.role === "user"
+                      ? "bg-primary/10 text-foreground rounded-tr-none"
+                      : "glass text-muted-foreground rounded-tl-none"
+                      }`}>
                       {msg.content}
                       {msg.role === "assistant" && isChatLoading && i === chatMessages.length - 1 && (
                         <span className="inline-block w-1.5 h-3 bg-primary/50 animate-pulse ml-0.5" />

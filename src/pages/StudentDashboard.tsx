@@ -8,12 +8,34 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
 
+interface UserStats {
+  total_points: number;
+  problems_solved: number;
+  current_streak: number;
+  longest_streak: number;
+}
+
+interface Submission {
+  id: string;
+  problem_id: number;
+  tests_passed: number;
+  tests_total: number;
+  score: number;
+  created_at: string;
+  problems?: { title: string; difficulty: string };
+}
+
+interface UserBadge {
+  id: string;
+  badges?: { name: string; icon: string; description: string };
+}
+
 const StudentDashboard = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [stats, setStats] = useState<any>(null);
-  const [recentSubs, setRecentSubs] = useState<any[]>([]);
-  const [badges, setBadges] = useState<any[]>([]);
+  const [stats, setStats] = useState<UserStats | null>(null);
+  const [recentSubs, setRecentSubs] = useState<Submission[]>([]);
+  const [badges, setBadges] = useState<UserBadge[]>([]);
   const [totalProblems, setTotalProblems] = useState(0);
   const [loading, setLoading] = useState(true);
 
@@ -91,7 +113,7 @@ const StudentDashboard = () => {
                 ) : recentSubs.map((sub) => (
                   <div key={sub.id} className="flex items-center justify-between p-3 rounded-lg bg-card/50 border border-border/30">
                     <div>
-                      <span className="text-sm font-medium">{(sub as any).problems?.title || `Problem #${sub.problem_id}`}</span>
+                      <span className="text-sm font-medium">{sub.problems?.title || `Problem #${sub.problem_id}`}</span>
                       <div className="flex items-center gap-2 mt-1">
                         <Badge variant={sub.tests_passed === sub.tests_total ? "easy" : "medium"} className="text-[10px]">
                           {sub.tests_passed}/{sub.tests_total} passed
@@ -119,8 +141,8 @@ const StudentDashboard = () => {
                 <div className="grid grid-cols-2 gap-3">
                   {badges.map((ub) => (
                     <div key={ub.id} className="flex flex-col items-center p-3 rounded-lg bg-card/50 border border-border/30 text-center">
-                      <span className="text-2xl mb-1">{(ub as any).badges?.icon || "🏆"}</span>
-                      <span className="text-xs font-semibold">{(ub as any).badges?.name}</span>
+                      <span className="text-2xl mb-1">{ub.badges?.icon || "🏆"}</span>
+                      <span className="text-xs font-semibold">{ub.badges?.name}</span>
                     </div>
                   ))}
                 </div>

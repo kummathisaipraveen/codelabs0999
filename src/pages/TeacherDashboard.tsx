@@ -8,19 +8,48 @@ import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
 import { useUserRole } from "@/hooks/useUserRole";
 
+interface StudentProfile {
+  user_id: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  created_at: string;
+  points?: {
+    total_points: number;
+    problems_solved: number;
+    current_streak: number;
+  } | null;
+}
+
+interface Problem {
+  id: number;
+  title: string;
+  difficulty: string;
+  [key: string]: unknown;
+}
+
+interface Submission {
+  id: string;
+  problem_id: number;
+  tests_passed: number;
+  tests_total: number;
+  score: number;
+  created_at: string;
+  problems?: { title: string; difficulty: string };
+}
+
 const TeacherDashboard = () => {
   const { user } = useAuth();
-  const { hasRole, isLoading: roleLoading } = useUserRole();
+  const { primaryRole, isLoading: roleLoading } = useUserRole();
   const navigate = useNavigate();
-  const [students, setStudents] = useState<any[]>([]);
-  const [problems, setProblems] = useState<any[]>([]);
-  const [submissions, setSubmissions] = useState<any[]>([]);
+  const [students, setStudents] = useState<StudentProfile[]>([]);
+  const [problems, setProblems] = useState<Problem[]>([]);
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (roleLoading) return;
     if (!user) { navigate("/auth"); return; }
-    if (!hasRole("teacher")) { navigate("/dashboard"); return; }
+    if (primaryRole !== "teacher") { navigate("/dashboard"); return; }
 
     const fetchData = async () => {
       const [profilesRes, problemsRes, subsRes] = await Promise.all([
@@ -43,7 +72,7 @@ const TeacherDashboard = () => {
       setLoading(false);
     };
     fetchData();
-  }, [user, navigate, hasRole, roleLoading]);
+  }, [user, navigate, primaryRole, roleLoading]);
 
   if (loading || roleLoading) return <div className="min-h-screen pt-20 flex items-center justify-center"><div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" /></div>;
 
@@ -121,7 +150,7 @@ const TeacherDashboard = () => {
                 ) : submissions.slice(0, 15).map((sub) => (
                   <div key={sub.id} className="flex items-center justify-between p-3 rounded-lg bg-card/50 border border-border/30">
                     <div>
-                      <span className="text-sm font-medium">{(sub as any).problems?.title || `Problem #${sub.problem_id}`}</span>
+                      <span className="text-sm font-medium">{sub.problems?.title || `Problem #${sub.problem_id}`}</span>
                       <div className="flex items-center gap-2 mt-1">
                         <Badge variant={sub.tests_passed === sub.tests_total ? "easy" : "medium"} className="text-[10px]">
                           {sub.tests_passed}/{sub.tests_total}
