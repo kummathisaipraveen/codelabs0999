@@ -66,6 +66,9 @@ class CodeExecutionRequest(BaseModel):
 class ChatRequest(BaseModel):
     messages: List[Dict[str, str]]
     problem_context: str
+    current_code: str = ""
+    problem_id: int
+    student_id: str
 
 class Assignment(BaseModel):
     id: str
@@ -155,8 +158,58 @@ async def execute_code(request: CodeExecutionRequest, user: dict = Depends(get_c
 @app.post("/chat")
 async def chat_agent(request: ChatRequest, user: dict = Depends(get_current_user)):
     try:
-        response = await ai_agent.get_socratic_response(request.messages, request.problem_context)
-        return {"role": "assistant", "content": response}
+        # 1. Fetch existing user level from ai_insights if it exists
+        user_level = None
+        if supabase_admin:
+            try:
+                insights_resp = supabase_admin.table("ai_insights").select("user_level").eq("student_id", request.student_id).eq("problem_id", request.problem_id).execute()
+                if insights_resp.data and len(insights_resp.data) > 0:
+                    user_level = insights_resp.data[0].get("user_level")
+            except Exception as e:
+                print(f"Failed to fetch insights: {e}")
+
+        # 2. Call AI Agent
+        ai_response_data = await ai_agent.get_socratic_response(
+            messages=request.messages, 
+            problem_context=request.problem_context,
+            current_code=request.current_code,
+            user_level=user_level
+        )
+        
+        # 3. Store new insights if provided by Gemini
+        if supabase_admin and isinstance(ai_response_data, dict):
+            update_payload = {}
+            if "level" in ai_response_data:
+                update_payload["user_level"] = ai_response_data["level"]
+            if "lacking_areas" in ai_response_data:
+                update_payload["lacking_areas"] = ai_response_data["lacking_areas"]
+            if "teacher_suggestions" in ai_response_data:
+                update_payload["teacher_suggestions"] = ai_response_data["teacher_suggestions"]
+                
+            if update_payload:
+                update_payload["student_id"] = request.student_id
+                update_payload["problem_id"] = request.problem_id
+                
+                try:
+                    # Upsert relying on UNIQUE(student_id, problem_id)
+                    # Note: Since there's no ON CONFLICT DO UPDATE built into this simple client easily, 
+                    # we will check if record exists first.
+                    check = supabase_admin.table("ai_insights").select("id").eq("student_id", request.student_id).eq("problem_id", request.problem_id).execute()
+                    if check.data and len(check.data) > 0:
+                        row_id = check.data[0]["id"]
+                        supabase_admin.table("ai_insights").update(update_payload).eq("id", row_id).execute()
+                    else:
+                        # Ensure user_level is set if we are inserting
+                        if "user_level" not in update_payload:
+                             update_payload["user_level"] = "Unknown"
+                        supabase_admin.table("ai_insights").insert(update_payload).execute()
+                except Exception as e:
+                    print(f"Failed to save AI Insights to database: {e}")
+                    
+        # 4. Return just the conversational response to the student
+        reply_text = ai_response_data.get("response", "I encountered an error formatting my response.") if isinstance(ai_response_data, dict) else str(ai_response_data)
+        
+        return {"role": "assistant", "content": reply_text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

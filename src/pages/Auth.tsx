@@ -44,38 +44,36 @@ const AuthPage = () => {
         toast({ title: "Welcome back!", description: "You've signed in successfully." });
         navigate("/");
       } else if (mode === "signup") {
-        // Use backend admin endpoint to create user with email pre-confirmed
-        // This bypasses Supabase email rate limits entirely — unlimited signups
-        const res = await fetch("/api/signup", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email,
-            password,
-            display_name: displayName,
-            role,
-          }),
+        // Sign up directly via Supabase JS client (runs in browser, no network issues)
+        // display_name and role are stored in user_metadata
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              display_name: displayName,
+              role,
+            },
+          },
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || "Signup failed");
+        if (signUpError) throw signUpError;
 
-        // Auto sign-in after successful creation
-        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-        if (signInError) throw signInError;
+        // If email confirmation is ON, the session will be null — guide the user
+        if (!signUpData.session) {
+          toast({
+            title: "Check your email!",
+            description: "We sent a confirmation link to " + email + ". Click it to activate your account, then log in.",
+          });
+          setMode("login");
+          return;
+        }
 
+        // Email confirmation is OFF — user is auto-confirmed and signed in
         toast({ title: "Account created!", description: "Welcome to CodeLabs!" });
         navigate("/");
       } else if (mode === "forgot") {
-        // Step 1: Check if user exists
-        const { data: exists, error: checkError } = await supabase.rpc('check_user_exists', { p_email: email });
-
-        if (checkError) throw checkError;
-
-        if (!exists) {
-          throw new Error("No account found with this email address.");
-        }
-
-        // Step 2: Send OTP
+        // Send OTP directly — Supabase returns an error if the email isn't registered
+        // (shouldCreateUser: false prevents creating new accounts via OTP)
         const { error: otpError } = await supabase.auth.signInWithOtp({
           email,
           options: {

@@ -1,0 +1,30 @@
+# CodeCoach Backend Dependencies
+
+# Web framework & server
+fastapi==0.119.1
+uvicorn==0.38.0
+
+# Data validation
+pydantic==2.11.7
+
+# Form data support (required by FastAPI for file/form uploads)
+python-multipart==0.0.20
+
+# HTTP requests (used by ai_agent.py for Gemini API calls)
+requests==2.32.4
+
+# Environment variable management
+python-dotenv==1.1.1
+
+# Authentication / JWT
+PyJWT==2.11.0
+python-jose[cryptography]==3.5.0
+
+# Supabase client
+supabase==2.28.0
+
+# Knowledge graph (used by ontology.py)
+networkx==3.5
+
+# Docker SDK (used by execution.py to manage containers)
+docker==7.1.0

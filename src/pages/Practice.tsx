@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Play, RotateCcw, Send, MessageCircle, ChevronRight, CheckCircle2, XCircle, Lightbulb, Loader2, Bot, User } from "lucide-react";
+import { Play, RotateCcw, Send, MessageCircle, ChevronRight, CheckCircle2, XCircle, Lightbulb, Loader2, Bot, User, Zap, Clock, Brain } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { AntiCheatMonitor } from "@/components/AntiCheatMonitor";
+import { usePythonRunner } from "@/hooks/usePythonRunner";
 
 type ChatMsg = { role: "user" | "assistant"; content: string };
 
@@ -101,8 +102,15 @@ const PracticePage = () => {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const [hasRun, setHasRun] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [runResults, setRunResults] = useState<{ input: string; expected: string; passed: boolean }[]>([]);
+  const [runResults, setRunResults] = useState<{ input: string; expected: string; actual?: string; passed: boolean; error?: string; execution_time_ms?: number }[]>([]);
   const [serverResponse, setServerResponse] = useState<{ tests_passed: number; tests_total: number; score: number; submission_id: string } | null>(null);
+  const [aiInsight, setAiInsight] = useState<string | null>(null);
+  const [isInsightLoading, setIsInsightLoading] = useState(false);
+
+  // Pyodide hook kept for future use when CDN is accessible; execution currently uses backend
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { runCode: _runCode } = usePythonRunner();
+
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -128,15 +136,26 @@ const PracticePage = () => {
 
       // ... auth checks ...
 
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({ title: "Authentication required", description: "Please sign in to chat with the AI.", variant: "destructive" });
+        setIsChatLoading(false);
+        setChatMessages((prev) => prev.slice(0, -1)); // Remove user message if no session
+        return;
+      }
+
       const resp = await fetch(CHAT_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          // Authorization headers...
+          "Authorization": `Bearer ${session.access_token}`
         },
         body: JSON.stringify({
           messages: updatedMessages,
-          problem_context: problemContext, // Note key change problemContext -> problem_context to match Python model
+          problem_context: problemContext,
+          current_code: code,
+          problem_id: parseInt(id || "0"),
+          student_id: user?.id
         }),
       });
 
@@ -162,8 +181,34 @@ const PracticePage = () => {
     }
   }, [chatInput, chatMessages, isChatLoading, problem, toast]);
 
-  // Set code when problem loads
-  const currentCode = code || problem?.default_code || "";
+
+  // Initialize code from problem default when problem loads — NOT as a computed fallback
+  // Unescape literal \n strings stored in the DB into real newlines
+  useEffect(() => {
+    if (problem?.default_code !== undefined) {
+      // DB may store newlines as literal \n string — convert to real newlines
+      const cleaned = problem.default_code.replace(/\\n/g, "\n").replace(/\\t/g, "    ");
+      setCode(cleaned);
+    }
+  }, [problem?.id]); // Only re-init when problem ID changes
+
+  // Tab key → insert 4 spaces for Python indentation
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const el = e.currentTarget;
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      const indent = "    "; // 4 spaces
+      const newCode = code.substring(0, start) + indent + code.substring(end);
+      setCode(newCode);
+      // Restore cursor position after the inserted spaces
+      requestAnimationFrame(() => {
+        el.selectionStart = el.selectionEnd = start + indent.length;
+      });
+    }
+  }, [code]);
+
 
   const testCases = (problem?.test_cases as unknown as TestCase[] | null) || [];
   const examples = (problem?.examples as unknown as Example[] | null) || [];
@@ -176,82 +221,86 @@ const PracticePage = () => {
     }
 
     setHasRun(true);
-    setOutput("Running tests on server...");
     setRunResults([]);
+    setAiInsight(null);
+    setOutput("Running your code...");
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
-        throw new Error("Please sign in to run code.");
-      }
-
-      // python backend
+      // Use backend /api/execute — runs Python via local subprocess (no CDN needed)
       const resp = await fetch("/api/execute", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          // Authorization: session?.access_token ... (Backend verify skipped for demo)
-        },
-        body: JSON.stringify({
-          code: currentCode,
-          language: "python",
-          test_cases: testCases
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, language: "python", test_cases: testCases }),
       });
 
       const data = await resp.json();
 
-      if (!resp.ok) {
-        throw new Error(data.error || data.detail || `Server error ${resp.status}`);
+      if (!resp.ok || data.status === "error" || data.status === "system_error" || data.status === "timeout") {
+        throw new Error(data.error || data.detail || `Execution failed (${data.status})`);
       }
 
-      // Backend returns { status: "success", results: [...], logs: "..." }
-      if (data.status === "error" || data.status === "system_error" || data.status === "timeout") {
-        throw new Error(data.error || "Execution failed");
-      }
-
-      const results = data.results.map((r: { input: string; expected: string; actual: string; passed: boolean }) => ({
-        input: r.input,
-        expected: r.expected,
-        actual: r.actual,
-        passed: r.passed
-      }));
-
+      const results = data.results;
       setRunResults(results);
 
       const passed = results.filter((r: { passed: boolean }) => r.passed).length;
       const total = results.length;
 
-      // Mocking the serverResponse structure expected by handleSubmit
       setServerResponse({
         tests_passed: passed,
         tests_total: total,
-        score: (passed / total) * 100, // Simplistic scoring
-        submission_id: "local-sub-" + Date.now()
+        score: total > 0 ? Math.round((passed / total) * 100) : 0,
+        submission_id: "run-" + Date.now(),
       });
 
-      setOutput(
-        `Server-verified results:\n\n${results
-          .map((r: { passed: boolean; input: string; expected: string; actual: string }, i: number) => `${r.passed ? "✓" : "✗"} Test ${i + 1}: ${r.input} → expected ${r.expected}, got ${r.actual}`)
-          .join("\n")}\n\n${passed}/${total} tests passed ${passed === total ? "🎉" : ""}`
-      );
+      const summary = results
+        .map((r: { passed: boolean; input: string; expected: string; actual?: string; execution_time_ms?: number }, i: number) =>
+          `${r.passed ? "✓" : "✗"} Test ${i + 1}${r.execution_time_ms !== undefined ? ` (${r.execution_time_ms}ms)` : ""}: ${r.input} → expected ${r.expected}, got ${r.actual ?? "error"}`
+        )
+        .join("\n");
+      setOutput(`${passed}/${total} tests passed\n\n${summary}${data.logs ? "\n\nOutput:\n" + data.logs : ""}`);
+
+      // Async AI insight — appears after results, non-blocking
+      if (problem) {
+        setIsInsightLoading(true);
+        try {
+          const firstFail = results.find((r: { passed: boolean }) => !r.passed);
+          const insightPrompt = [{
+            role: "user", content:
+              `Python problem: "${problem.title}" (${problem.difficulty})\n` +
+              `User code:\n\`\`\`python\n${code}\n\`\`\`\n` +
+              `Test results: ${passed}/${total} passed.\n` +
+              (firstFail
+                ? `First failure: input=${firstFail.input}, expected=${firstFail.expected}, got=${firstFail.actual}\n`
+                : "All tests passed!\n") +
+              `Give ONLY: 1 code quality observation (e.g. time complexity), 1 Socratic nudge if not all passed, and skill level: Beginner/Developing/Proficient/Advanced. Max 3 sentences. Be concise.`
+          }];
+          const chatResp = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messages: insightPrompt, problem_context: problem.title }),
+          });
+          if (chatResp.ok) {
+            const d = await chatResp.json();
+            if (d.content) setAiInsight(d.content);
+          }
+        } catch {
+          // Best-effort — silently ignore
+        } finally {
+          setIsInsightLoading(false);
+        }
+      }
 
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : "Execution failed";
-      setOutput(`Error: ${errMsg}`);
-      toast({ title: "Execution failed", description: errMsg, variant: "destructive" });
-
+      setOutput(`❌ ${errMsg}`);
+      toast({ title: "Execution failed", description: errMsg.slice(0, 100), variant: "destructive" });
       if (!isAssignment) {
         const randomMsg = motivationalMessages[Math.floor(Math.random() * motivationalMessages.length)];
-        setTimeout(() => {
-          toast({
-            title: "Don't give up!",
-            description: randomMsg,
-          });
-        }, 1000);
+        setTimeout(() => toast({ title: "Don't give up!", description: randomMsg }), 1000);
       }
     }
   };
+
 
   const handleSubmit = async () => {
     if (!user) {
@@ -372,7 +421,14 @@ const PracticePage = () => {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => { setCode(problem.default_code); setOutput(null); setHasRun(false); setRunResults([]); }}
+                onClick={() => {
+                  const cleaned = (problem.default_code || "").replace(/\\n/g, "\n").replace(/\\t/g, "    ");
+                  setCode(cleaned);
+                  setOutput(null);
+                  setHasRun(false);
+                  setRunResults([]);
+                  setAiInsight(null);
+                }}
                 className="gap-1.5 text-xs border-border/50"
               >
                 <RotateCcw className="h-3 w-3" />
@@ -402,10 +458,12 @@ const PracticePage = () => {
           <div className="flex-1 flex flex-col">
             <div className="flex-1 relative">
               <Textarea
-                value={currentCode}
+                value={code}
                 onChange={(e) => setCode(e.target.value)}
+                onKeyDown={handleKeyDown}
                 className="absolute inset-0 resize-none rounded-none border-0 bg-card font-mono text-sm leading-relaxed p-4 focus-visible:ring-0 focus-visible:ring-offset-0"
                 spellCheck={false}
+                placeholder="Write your Python solution here..."
               />
             </div>
 
@@ -428,21 +486,51 @@ const PracticePage = () => {
                   </div>
                 )}
 
-                {hasRun && (
+                {hasRun && runResults.length > 0 && (
                   <div className="mt-4 space-y-2">
                     {runResults.map((t, i) => (
-                      <div key={i} className="flex items-start gap-2 text-xs font-mono">
-                        {t.passed ? (
-                          <CheckCircle2 className="h-3.5 w-3.5 text-success mt-0.5 flex-shrink-0" />
-                        ) : (
-                          <XCircle className="h-3.5 w-3.5 text-destructive mt-0.5 flex-shrink-0" />
-                        )}
-                        <div>
-                          <span className="text-muted-foreground">{t.input}</span>
-                          <span className={t.passed ? "text-success" : "text-destructive"} > → {t.expected}</span>
+                      <div key={i} className="rounded-lg border border-border/50 bg-card/50 p-2.5 space-y-1">
+                        <div className="flex items-center gap-2 text-xs font-mono">
+                          {t.passed ? (
+                            <CheckCircle2 className="h-3.5 w-3.5 text-success flex-shrink-0" />
+                          ) : (
+                            <XCircle className="h-3.5 w-3.5 text-destructive flex-shrink-0" />
+                          )}
+                          <span className="text-muted-foreground">Test {i + 1}</span>
+                          {t.execution_time_ms !== undefined && (
+                            <span className="ml-auto flex items-center gap-1 text-[10px] text-muted-foreground/60">
+                              <Clock className="h-2.5 w-2.5" />{t.execution_time_ms}ms
+                            </span>
+                          )}
                         </div>
+                        <div className="grid grid-cols-3 gap-1 text-[10px] font-mono pl-5">
+                          <span className="text-muted-foreground">in: <span className="text-foreground">{t.input}</span></span>
+                          <span className="text-muted-foreground">exp: <span className="text-success">{t.expected}</span></span>
+                          <span className="text-muted-foreground">got: <span className={t.passed ? "text-success" : "text-destructive"}>{t.actual ?? "—"}</span></span>
+                        </div>
+                        {t.error && (
+                          <pre className="text-[9px] text-destructive/80 pl-5 whitespace-pre-wrap leading-relaxed">{t.error}</pre>
+                        )}
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* AI Insight Card — loads asynchronously after results */}
+                {(isInsightLoading || aiInsight) && (
+                  <div className="mt-4 rounded-lg border border-primary/30 bg-primary/5 p-3">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-primary mb-1.5">
+                      <Brain className="h-3.5 w-3.5" />
+                      <Zap className="h-3 w-3" />
+                      AI Code Insight
+                    </div>
+                    {isInsightLoading ? (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Loader2 className="h-3 w-3 animate-spin" /> Analysing your code...
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground whitespace-pre-wrap">{aiInsight}</p>
+                    )}
                   </div>
                 )}
               </div>

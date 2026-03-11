@@ -1,4 +1,3 @@
-
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -17,6 +16,7 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Clock } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
 interface Assignment {
     id: string;
@@ -27,41 +27,101 @@ interface Assignment {
     created_at: string;
 }
 
+interface UserPoints {
+    problems_solved: number;
+    current_streak: number;
+    total_points: number;
+}
+
+interface ActivityItem {
+    id: string;
+    problem_title: string;
+    created_at: string;
+    score: number;
+}
+
 const StudentDashboard = () => {
     const navigate = useNavigate();
     const { user } = useAuth();
     const { toast } = useToast();
+
     const [assignments, setAssignments] = useState<Assignment[]>([]);
     const [showAlert, setShowAlert] = useState(false);
+    const [points, setPoints] = useState<UserPoints>({ problems_solved: 0, current_streak: 0, total_points: 0 });
+    const [recentActivity, setRecentActivity] = useState<ActivityItem[]>([]);
 
     useEffect(() => {
-        if (!user?.id) {
-            console.log("No user ID found");
-            return;
-        }
+        if (!user?.id) return;
 
-        console.log("Fetching assignments for user:", user.id);
-
-        const fetchAssignments = async () => {
+        const fetchDashboardData = async () => {
             try {
-                const res = await fetch(`/api/assignments/${user.id}`);
-                console.log("Fetch status:", res.status);
-                const data = await res.json();
-                console.log("Assignments data:", data);
+                // Fetch Active Assignments
+                const { data: assignmentsData, error: assignmentsError } = await (supabase as any)
+                    .from("assignments")
+                    .select("*")
+                    .eq("student_id", user.id)
+                    .eq("status", "pending");
 
-                if (data && data.length > 0) {
-                    setAssignments(data);
-                    setShowAlert(true);
+                if (!assignmentsError && assignmentsData && assignmentsData.length > 0) {
+                    setAssignments(assignmentsData);
+                    // Only show alert if it's new (simple heuristic: first load)
+                    if (assignments.length === 0) setShowAlert(true);
                 } else {
-                    console.log("No assignments found in response");
+                    setAssignments([]);
                 }
+
+                // Fetch User Points
+                const { data: pointsData } = await (supabase as any)
+                    .from("user_points")
+                    .select("*")
+                    .eq("user_id", user.id)
+                    .single();
+
+                if (pointsData) {
+                    setPoints({
+                        problems_solved: pointsData.problems_solved || 0,
+                        current_streak: pointsData.current_streak || 0,
+                        total_points: pointsData.total_points || 0
+                    });
+                }
+
+                // Fetch Recent Submissions
+                const { data: submissionsData } = await (supabase as any)
+                    .from("submissions")
+                    .select("id, created_at, score, problems(title)")
+                    .eq("user_id", user.id)
+                    .order("created_at", { ascending: false })
+                    .limit(5);
+
+                if (submissionsData) {
+                    setRecentActivity(submissionsData.map((s: any) => ({
+                        id: s.id,
+                        problem_title: s.problems?.title || "Code Challenge",
+                        created_at: new Date(s.created_at).toLocaleString(),
+                        score: s.score || 0
+                    })));
+                }
+
             } catch (e) {
-                console.error("Failed to fetch assignments:", e);
+                console.error("Failed to fetch dashboard data:", e);
             }
         };
 
-        fetchAssignments();
+        fetchDashboardData();
+
+        // Setup Realtime Listeners
+        const channel = supabase.channel('student_updates')
+            .on('postgres', { event: '*', schema: 'public', table: 'assignments', filter: `student_id=eq.${user.id}` }, () => fetchDashboardData())
+            .on('postgres', { event: '*', schema: 'public', table: 'submissions', filter: `user_id=eq.${user.id}` }, () => fetchDashboardData())
+            .on('postgres', { event: '*', schema: 'public', table: 'user_points', filter: `user_id=eq.${user.id}` }, () => fetchDashboardData())
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user?.id]);
+
 
     const copyId = () => {
         if (user?.id) {
@@ -98,7 +158,7 @@ const StudentDashboard = () => {
                             <AlertDialogTitle>New Assignment Received!</AlertDialogTitle>
                             <AlertDialogDescription>
                                 Your teacher has assigned you {assignments.length} new problem set(s).
-                                Time limit: {assignments[0]?.time_limit_minutes} minutes.
+                                Time limit: {assignments[0]?.time_limit_minutes || 30} minutes.
                             </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
@@ -107,9 +167,9 @@ const StudentDashboard = () => {
                     </AlertDialogContent>
                 </AlertDialog>
 
-                <div className="grid gap-4 md:grid-cols-3">
+                <div className="grid gap-4 md:grid-cols-4">
                     {assignments.length > 0 && (
-                        <Card className="md:col-span-3 border-primary/50 bg-primary/5">
+                        <Card className="md:col-span-4 border-primary/50 bg-primary/5">
                             <CardHeader>
                                 <CardTitle className="flex items-center gap-2">
                                     <Clock className="h-5 w-5 text-primary" />
@@ -119,7 +179,7 @@ const StudentDashboard = () => {
                             <CardContent>
                                 <div className="space-y-2">
                                     {assignments.map((a) => (
-                                        <div key={a.id} className="flex items-center justify-between p-3 bg-card rounded border">
+                                        <div key={a.id} className="flex items-center justify-between p-3 bg-background rounded border">
                                             <div>
                                                 <p className="font-semibold">Problems: {a.problem_ids.join(", ")}</p>
                                                 <p className="text-xs text-muted-foreground">{a.time_limit_minutes} min time limit</p>
@@ -140,8 +200,18 @@ const StudentDashboard = () => {
                             <Code2 className="h-4 w-4 text-muted-foreground" />
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold">12</div>
-                            <p className="text-xs text-muted-foreground">+2 from last week</p>
+                            <div className="text-2xl font-bold">{points.problems_solved}</div>
+                            <p className="text-xs text-muted-foreground">Keep at it!</p>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                            <CardTitle className="text-sm font-medium">Total Points</CardTitle>
+                            <BookOpen className="h-4 w-4 text-muted-foreground" />
+                        </CardHeader>
+                        <CardContent>
+                            <div className="text-2xl font-bold">{points.total_points}</div>
+                            <p className="text-xs text-muted-foreground">XP Earned</p>
                         </CardContent>
                     </Card>
                     <Card>
@@ -150,8 +220,8 @@ const StudentDashboard = () => {
                             <Trophy className="h-4 w-4 text-muted-foreground" />
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold">5 Days</div>
-                            <p className="text-xs text-muted-foreground">Keep it up!</p>
+                            <div className="text-2xl font-bold">{points.current_streak} Days</div>
+                            <p className="text-xs text-muted-foreground">Don't break the chain!</p>
                         </CardContent>
                     </Card>
                     <Card>
@@ -160,8 +230,8 @@ const StudentDashboard = () => {
                             <BookOpen className="h-4 w-4 text-muted-foreground" />
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold">85%</div>
-                            <Progress value={85} className="mt-2" />
+                            <div className="text-2xl font-bold">{Math.min(100, points.problems_solved * 5)}%</div>
+                            <Progress value={Math.min(100, points.problems_solved * 5)} className="mt-2" />
                         </CardContent>
                     </Card>
                 </div>
@@ -173,16 +243,20 @@ const StudentDashboard = () => {
                         </CardHeader>
                         <CardContent>
                             <div className="space-y-4">
-                                {[1, 2, 3].map((i) => (
-                                    <div key={i} className="flex items-center gap-4 border-b pb-4 last:border-0 last:pb-0">
+                                {recentActivity.length === 0 ? (
+                                    <div className="text-sm text-center py-6 text-muted-foreground border rounded-lg">
+                                        No recent practice activity yet. Go solve a problem!
+                                    </div>
+                                ) : recentActivity.map((activity) => (
+                                    <div key={activity.id} className="flex items-center gap-4 border-b pb-4 last:border-0 last:pb-0">
                                         <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
                                             <Code2 className="h-5 w-5 text-primary" />
                                         </div>
                                         <div>
-                                            <p className="font-medium">Solved "Two Sum"</p>
-                                            <p className="text-sm text-muted-foreground">2 hours ago</p>
+                                            <p className="font-medium">Solved "{activity.problem_title}"</p>
+                                            <p className="text-sm text-muted-foreground">{activity.created_at}</p>
                                         </div>
-                                        <div className="ml-auto font-medium text-green-500">+10 XP</div>
+                                        <div className="ml-auto font-medium text-green-500">+{activity.score} XP</div>
                                     </div>
                                 ))}
                             </div>
