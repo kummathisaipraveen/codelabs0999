@@ -106,7 +106,8 @@ for _i, _case in enumerate(_test_cases):
 
         _elapsed = round((time.time() - _start) * 1000, 2)
         _actual = str(_got).strip()
-        _passed = _actual == str(_exp).strip()
+        # Normalize whitespace for comparison to avoid false failures (e.g. [0, 1] vs [0,1])
+        _passed = _actual.replace(" ", "").lower() == str(_exp).replace(" ", "").lower()
         _results.append({
             "test_case": _i + 1,
             "input": _inp,
