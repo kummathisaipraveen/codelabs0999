@@ -18,6 +18,7 @@ type ChatMsg = { role: "user" | "assistant"; content: string };
 interface TestCase {
   input: string;
   expected: string;
+  output?: string;
 }
 
 interface Example {

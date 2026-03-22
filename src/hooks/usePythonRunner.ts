@@ -76,9 +76,9 @@ from io import StringIO
 _test_cases = ${casesJson}
 _results = []
 
-for _i, _case in enumerate(_test_cases):
-    _inp = _case["input"]
-    _exp = _case["expected"]
+    for _i, _case in enumerate(_test_cases):
+    _inp = _case.get("input", "")
+    _exp = _case.get("expected", _case.get("output", ""))
     _start = time.time()
     _stdout_capture = StringIO()
     _old_stdout = sys.stdout
