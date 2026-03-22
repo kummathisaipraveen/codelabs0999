@@ -84,13 +84,23 @@ for _i, _case in enumerate(_test_cases):
     _old_stdout = sys.stdout
     sys.stdout = _stdout_capture
     try:
-        # Try eval first (expression), then exec (statement like print)
-        try:
+        # 1. Try to find a user-defined function in the environment
+        _all_names = set(globals().keys()) | set(locals().keys())
+        _funcs = [v for k, v in globals().items() if callable(v) and not k.startswith('_') and k != 'buildHarness']
+        
+        if _funcs:
+            _func = _funcs[-1] # Usually the last defined function is the solution
+            try:
+                # Handle inputs that are tuples/lists of args safely
+                _args = eval("(" + str(_inp) + ",)")
+                _got = _func(*_args)
+            except:
+                # Fallback to direct eval if argument unpacking fails
+                _got = eval(_inp)
+        else:
+            # Fallback for simple expressions or constant checks
             _got = eval(_inp)
-        except SyntaxError:
-            _ns = {}
-            exec(_inp, _ns)
-            _got = _ns.get("result", None)
+
         _elapsed = round((time.time() - _start) * 1000, 2)
         _actual = str(_got).strip()
         _passed = _actual == str(_exp).strip()
