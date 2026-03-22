@@ -393,42 +393,28 @@ async def get_next_task(user: dict = Depends(get_current_user)):
         
         # 2. Get dynamic recommendation from Assessment ML Engine
         recommendation = assessment_engine.recommend_next_task(user_id, mastered_concepts)
+          # 3. Get a REAL problem from the database that matches the concept or level
+        problem_id = 1 # Absolute fallback
         
-        # 3. Build Mock Problem Data based on Recommendation
-        rec_type = recommendation["recommended_type"]
-        difficulty = recommendation["difficulty"]
-        
-        problem_data = {
-            "id": 999 + int(time.time()) % 1000,
-            "title": f"Dynamic {concept} Task",
-            "description": f"This is an auto-generated {rec_type} task tailored to your current performance.",
-            "difficulty": difficulty,
-            "task_type": rec_type,
-            "concepts": [concept],
-            "starter_code": "",
-            "test_cases": [],
-            "examples": [],
-            "constraints": []
-        }
-        
-        if rec_type == "Code Comprehension":
-            problem_data["description"] = "What will the following code output?\n```python\nx = 5\nfor i in range(3):\n    x += i\nprint(x)\n```"
-            problem_data["options"] = ["5", "8", "11", "Error"]
-            problem_data["answer"] = "8"
-        elif rec_type == "Debugging":
-            problem_data["description"] = "This code is supposed to return the sum of a list. Can you fix the bug?"
-            problem_data["starter_code"] = "def solution(nums):\n    total = 0\n    for i in range(len(nums)+1): # Bug is here!\n        total += nums[i]\n    return total"
-            problem_data["test_cases"] = [{"input": "[1, 2, 3]", "expected": "6"}]
-        else:
-            problem_data["description"] = f"### Master {concept}!\nWelcome to your personalized growth path. Write a Python function `solution(val)` that takes a value and returns it exactly as it is. This tests your ability to handle basic function definitions and return types in {concept}."
-            problem_data["starter_code"] = "def solution(val):\n    # Your logic here to demonstrate " + concept + "\n    return val"
-            problem_data["test_cases"] = [{"input": "42", "expected": "42"}]
+        if supabase_admin:
+            try:
+                # Find problems matching the recommended focus
+                diff = recommendation.get("difficulty", "Medium")
+                problems_query = supabase_admin.table("problems").select("id").eq("difficulty", diff).limit(10).execute()
+                if not problems_query.data:
+                    problems_query = supabase_admin.table("problems").select("id").limit(10).execute()
+                
+                import random
+                if problems_query.data:
+                    problem_id = random.choice(problems_query.data)["id"]
+            except Exception as e:
+                print(f"Next task query error: {e}")
 
         return {
             "status": "success",
             "concept_focus": concept,
             "recommendation": recommendation,
-            "problem": problem_data
+            "next_id": problem_id
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

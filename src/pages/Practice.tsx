@@ -587,6 +587,26 @@ const PracticePage = () => {
       setIsSubmitting(false);
     }
   };
+  const handleNextTask = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const resp = await fetch("/api/next_task", {
+        headers: { "Authorization": `Bearer ${session.access_token}` },
+      });
+      const data = await resp.json();
+      if (data.status === "success" && data.next_id) {
+        navigate(`/practice/${data.next_id}?v=${Date.now()}`);
+      } else {
+        // Fallback: reload current or go to first problem
+        navigate("/practice/1?v=" + Date.now());
+      }
+    } catch (e) {
+      console.error("Next task error", e);
+      navigate("/problems");
+    }
+  };
 
   if (isLoading) {
     return (
@@ -757,16 +777,16 @@ const PracticePage = () => {
                 {isSubmitting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
                 Submit
               </Button>
-              {serverResponse?.tests_passed === serverResponse?.tests_total && serverResponse?.tests_total > 0 && (
-                <Button
-                  size="sm"
-                  onClick={() => navigate("/practice/999?v=" + Date.now())}
-                  className="gap-1.5 text-xs gradient-primary text-primary-foreground ml-2 glow-primary"
-                >
-                  Next Task <ChevronRight className="h-3 w-3" />
-                </Button>
-              )}
-            </div>
+                {serverResponse?.tests_passed === serverResponse?.tests_total && serverResponse?.tests_total > 0 && (
+                  <Button
+                    size="sm"
+                    onClick={handleNextTask}
+                    className="gap-1.5 text-xs gradient-primary text-primary-foreground ml-2 glow-primary"
+                  >
+                    Next Task <ChevronRight className="h-3 w-3" />
+                  </Button>
+                )}
+              </div>
           </div>
 
           {/* Code editor area */}
