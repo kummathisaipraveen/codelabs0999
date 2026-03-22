@@ -105,6 +105,21 @@ const PracticePage = () => {
     },
   });
 
+  const { data: assignment } = useQuery({
+    queryKey: ["assignment", assignmentId],
+    queryFn: async () => {
+      if (!assignmentId) return null;
+      const { data, error } = await (supabase as any)
+        .from("assignments")
+        .select("*")
+        .eq("id", assignmentId)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!assignmentId,
+  });
+
   const [files, setFiles] = useState<Record<string, string>>({ "main.py": "" });
   const [activeFile, setActiveFile] = useState("main.py");
   const [openFiles, setOpenFiles] = useState<string[]>(["main.py"]);
@@ -588,6 +603,20 @@ const PracticePage = () => {
     }
   };
   const handleNextTask = async () => {
+    // If it's an assignment, navigate to the next problem in the assignment
+    if (assignmentId && assignment) {
+      const currentIdx = assignment.problem_ids?.indexOf(problemId);
+      if (currentIdx !== -1 && currentIdx < assignment.problem_ids.length - 1) {
+        const nextId = assignment.problem_ids[currentIdx + 1];
+        navigate(`/practice/${nextId}?assignment_id=${assignmentId}&v=${Date.now()}`);
+        return;
+      } else {
+        toast({ title: "Assignment complete!", description: "You've finished all problems in this assignment." });
+        navigate("/student-dashboard");
+        return;
+      }
+    }
+
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
