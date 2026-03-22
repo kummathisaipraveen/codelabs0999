@@ -1,9 +1,8 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
 import os
 import json
 import requests
 from dotenv import load_dotenv, find_dotenv
-import typing
 
 # Load environment variables from .env file
 load_dotenv(find_dotenv())
@@ -17,7 +16,7 @@ class AIAgentService:
         if not self.api_key:
             print("⚠️ Warning: GEMINI_API_KEY (or GOOGLE_API_KEY) not found. AI Chat will use mock responses.")
 
-    async def get_socratic_response(self, messages: List[Dict[str, str]], problem_context: str, current_code: str = "", user_level: typing.Optional[str] = None) -> Dict[str, str]:
+    async def get_socratic_response(self, messages: List[Dict[str, str]], problem_context: str, current_code: str = "", user_level: Optional[str] = None, test_results: Optional[str] = None) -> Dict[str, str]:
         """
         Generates a Socratic response using Google Gemini API.
         Returns a dict with 'response', and optionally 'level', 'lacking_areas', 'teacher_suggestions'.
@@ -32,27 +31,34 @@ Problem Context:
 {problem_context}
 
 Rules for Assessment Phase:
-1. Ask a conceptual question (1 at a time) to gauge their understanding of the problem or algorithms.
-2. Wait for their answer. Do not give the code.
-3. If this is their 3rd answer, you MUST define their level as Beginner, Intermediate, or Advanced.
-4. Output strict JSON with keys: "response" (your chat reply), and optionally "level" (only if you have assessed them).
+1. Ask a SINGLE conceptual question to gauge their understanding of the problem or algorithms.
+2. Wait for their answer. NEVER give the code or direct solution.
+3. Keep your response very concise, encouraging, and format code or variable names using markdown backticks.
+4. If this is their 3rd answer, you MUST define their level as Beginner, Intermediate, or Advanced.
+5. Output strict JSON format: {{"response": "your conversational reply to the student", "level": "optional level"}}
 """
         else:
             system_prompt = f"""You are a Socratic coding tutor.
 Problem Context:
 {problem_context}
 Student Level: {user_level or 'Unknown'}
+Test Results (Recent Execution):
+{test_results or 'No recent run.'}
+
 Student's Current Code:
 ```python
 {current_code}
 ```
 
 Rules for Guidance Phase:
-1. Guide the student based on their Current Code and Level. Never give the answer directly.
-2. Output strict JSON with keys: 
-   - "response" (your conversational reply to the student)
-   - "lacking_areas" (short note for the teacher on what the student is struggling with based on their code)
-   - "teacher_suggestions" (actionable advice for the teacher to help this student)
+1. Guide the student based on their Current Code, Level, and specific Test Failures. NEVER give the exact code solution.
+2. Ask leading questions that address the root cause of the failures (e.g. "I notice test 2 failed because it expected 5 but got 4. What happens when the input is 0?").
+3. Provide small, precise hints using markdown for code elements.
+4. Keep your response conversational, encouraging, and concise.
+5. Output strict JSON format with these exact keys: 
+   - "response": your conversational reply to the student, properly formatting any code snippets in markdown.
+   - "lacking_areas": short note for the teacher on what the student is struggling with based on their code.
+   - "teacher_suggestions": actionable advice for the teacher to help this student.
 """
 
         # If no API key, return mock JSON
@@ -113,3 +119,47 @@ Rules for Guidance Phase:
         except Exception as e:
             print(f"AI Service Error: {e}")
             return {"response": "Sorry, something went wrong with the AI service."}
+
+    async def get_progressive_hint(self, level: int, problem_context: str, current_code: str, test_results: Optional[str] = None) -> Dict[str, str]:
+        """
+        Generates a level-specific hint (1: Conceptual, 2: Logic, 3: Snippet).
+        """
+        prompts = {
+            1: "Goal: Conceptual. Ask a question about the algorithm or approach. Do not mention code specifics.",
+            2: "Goal: Logic. Point out a specific logical flaw or missing edge case in their code. Very brief.",
+            3: "Goal: Snippet Pattern. Suggest a specific built-in function or a 1-2 line pattern (e.g. a list comprehension structure) that might help. No solution."
+        }
+        
+        goal = prompts.get(level, prompts[1])
+        
+        system_prompt = f"""You are an efficient coding coach.
+Problem Context: {problem_context}
+Student Code:
+```python
+{current_code}
+```
+Test Results: {test_results or 'None'}
+
+Your Task: {goal}
+Rules:
+1. Be extremely concise (MAX 2 sentences).
+2. Never give the full code solution.
+3. Format specifically as JSON: {{"hint": "your 1-2 sentence hint text"}}
+"""
+        
+        if not self.api_key:
+            return {"hint": f"Level {level} hint: Look at the problem again! (Set API key for real hints)"}
+
+        try:
+            payload = {
+                "contents": [{"role": "user", "parts": [{"text": system_prompt}]}],
+                "generationConfig": { "temperature": 0.4, "maxOutputTokens": 100, "responseMimeType": "application/json" }
+            }
+            response = requests.post(f"{self.api_url}?key={self.api_key}", json=payload)
+            response.raise_for_status()
+            data = response.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            return json.loads(text)
+        except Exception as e:
+            print(f"Hint Service Error: {e}")
+            return {"hint": "I'm stumped on this one. Try running your code again to see if you can debug it!"}

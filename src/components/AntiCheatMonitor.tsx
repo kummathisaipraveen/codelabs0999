@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
+import { useParams } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
 
 interface AntiCheatProps {
   onViolation: (type: string) => void;
@@ -7,13 +10,39 @@ interface AntiCheatProps {
 
 export const AntiCheatMonitor = ({ onViolation }: AntiCheatProps) => {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const { id } = useParams<{ id: string }>();
   const [blurCount, setBlurCount] = useState(0);
+
+  const logInteraction = async (actionType: string, metadata: any) => {
+    if (!user) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      await fetch("/api/logs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session?.access_token}`
+        },
+        body: JSON.stringify({
+          student_id: user.id,
+          problem_id: id ? parseInt(id) : null,
+          action_type: actionType,
+          metadata
+        })
+      });
+    } catch (e) { console.error("Failed to log interaction", e); }
+  };
 
   useEffect(() => {
     // 1. Detect Tab Switching / Window Blur
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        setBlurCount(prev => prev + 1);
+        setBlurCount(prev => {
+          const next = prev + 1;
+          logInteraction("tab_switch", { blurCount: next });
+          return next;
+        });
         onViolation("tab_switch");
         toast({
           title: "Focus Lost!",
@@ -23,15 +52,14 @@ export const AntiCheatMonitor = ({ onViolation }: AntiCheatProps) => {
       }
     };
 
-    // 2. Detect Copy/Paste (Global listener, though closer to editor is better)
+    // 2. Detect Copy/Paste
     const handleCopy = (e: ClipboardEvent) => {
-        // Allow copy if it's from the problem description? 
-        // For now, simple strict mode: log it.
+        logInteraction("copy_attempt", { path: window.location.pathname });
         onViolation("copy_attempt");
-        // e.preventDefault(); // Optional: Block it entirely
     };
 
     const handlePaste = (e: ClipboardEvent) => {
+        logInteraction("paste_attempt", { path: window.location.pathname });
         onViolation("paste_attempt");
         e.preventDefault(); 
         toast({

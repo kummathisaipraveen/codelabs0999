@@ -38,14 +38,11 @@ const LeaderboardPage = () => {
   const { data: leaderboardData = [], isLoading } = useQuery({
     queryKey: ["leaderboard"],
     queryFn: async () => {
-      // Fetch points
-      const { data: points, error: pointsError } = await supabase
-        .from("user_points")
-        .select("user_id, total_points, current_streak, problems_solved")
-        .order("total_points", { ascending: false })
-        .limit(20);
+      // Fetch points from new gamification API
+      const res = await fetch("/api/leaderboard");
+      if (!res.ok) throw new Error("Failed to fetch leaderboard");
+      const points = await res.json();
 
-      if (pointsError) throw pointsError;
       if (!points || points.length === 0) return [];
 
       // Fetch profiles for those users
@@ -64,9 +61,9 @@ const LeaderboardPage = () => {
         return {
           rank: i + 1,
           name,
-          points: entry.total_points,
-          streak: entry.current_streak,
-          problemsSolved: entry.problems_solved,
+          points: entry.total_score || 0,
+          streak: entry.current_streak || 0,
+          problemsSolved: entry.badges ? entry.badges.length : 0,
           avatar: name
             .split(" ")
             .map((w: string) => w[0])

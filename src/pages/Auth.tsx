@@ -69,7 +69,7 @@ const AuthPage = () => {
         }
 
         // Email confirmation is OFF — user is auto-confirmed and signed in
-        toast({ title: "Account created!", description: "Welcome to CodeLabs!" });
+        toast({ title: "Account created!", description: "Welcome to CodeCoach!" });
         navigate("/");
       } else if (mode === "forgot") {
         // Send OTP directly — Supabase returns an error if the email isn't registered
@@ -122,7 +122,7 @@ const AuthPage = () => {
             <Code2 className="h-5 w-5 text-primary-foreground" />
           </div>
           <span className="text-2xl font-bold tracking-tight">
-            CODE <span className="gradient-text">LABS</span>
+            CODE <span className="gradient-text">COACH</span>
           </span>
         </div>
 

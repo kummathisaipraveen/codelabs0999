@@ -1,16 +1,24 @@
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+import os, sys, time, uuid
+# Ensure the backend directory is in the path for Vercel/Serverless imports
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from datetime import datetime
+import subprocess
+from typing import List, Optional, Dict, Any
 from execution import ExecutionService
 from ai_agent import AIAgentService
 from ontology import OntologyService
-import uuid
-from datetime import datetime
-from jose import jwt as jose_jwt, JWTError
-import os
+from analytics import AnalyticsService
+from scoring import GamificationService
+from recruiter import RecruiterService
+from jose import jwt, JWTError
 from dotenv import load_dotenv, find_dotenv
+import supabase
 from supabase import create_client, Client
+import json
+import requests
 
 load_dotenv(find_dotenv())
 
@@ -38,7 +46,7 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
     
     try:
         token = authorization.replace("Bearer ", "")
-        payload = jose_jwt.decode(
+        payload = jwt.decode(
             token, 
             SUPABASE_JWT_SECRET, 
             algorithms=["HS256"], 
@@ -48,9 +56,17 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-# Initialize services (Singleton pattern for this simple demo)
+# Initialize services
 ai_agent = AIAgentService()
 ontology_service = OntologyService()
+analytics_service = AnalyticsService()
+gamification_service = GamificationService()
+from assessment import AssessmentEngine
+assessment_engine = AssessmentEngine()
+recruiter_service = RecruiterService()
+
+def get_recruiter():
+    return recruiter_service
 
 class TestResult(BaseModel):
     input: str
@@ -59,7 +75,7 @@ class TestResult(BaseModel):
     passed: bool
 
 class CodeExecutionRequest(BaseModel):
-    code: str
+    code: Any
     language: str = "python"
     test_cases: List[Dict[str, str]]
 
@@ -88,6 +104,23 @@ class SignupRequest(BaseModel):
     password: str
     display_name: str
     role: str = "student"
+
+class LogRequest(BaseModel):
+    student_id: str
+    problem_id: Optional[int] = None
+    action_type: str
+    metadata: dict
+
+class ScoreRequest(BaseModel):
+    student_id: str
+    problem_id: int
+    score: int
+
+class SecurityLogRequest(BaseModel):
+    problem_id: int
+    event_type: str
+    wpm: Optional[int] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 # In-memory storage for assignments
 assignments: List[Assignment] = []
@@ -154,71 +187,107 @@ async def execute_code(request: CodeExecutionRequest, user: dict = Depends(get_c
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class HintRequest(BaseModel):
+    level: int
+    problem_context: str
+    current_code: str
+    problem_id: int
+    test_results: Optional[str] = None
 
 @app.post("/chat")
-async def chat_agent(request: ChatRequest, user: dict = Depends(get_current_user)):
+async def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
     try:
-        # 1. Fetch existing user level from ai_insights if it exists
-        user_level = None
+        # Get user level from latest insight if available
+        user_level = "Beginner"
         if supabase_admin:
             try:
-                insights_resp = supabase_admin.table("ai_insights").select("user_level").eq("student_id", request.student_id).eq("problem_id", request.problem_id).execute()
-                if insights_resp.data and len(insights_resp.data) > 0:
-                    user_level = insights_resp.data[0].get("user_level")
+                insight_resp = supabase_admin.table("ai_insights")\
+                    .select("user_level")\
+                    .eq("student_id", user.get("sub"))\
+                    .order("updated_at", { "ascending": False })\
+                    .limit(1)\
+                    .execute()
+                if insight_resp.data:
+                    user_level = insight_resp.data[0]["user_level"]
             except Exception as e:
                 print(f"Failed to fetch insights: {e}")
+        
+        # Enrich with test context if available in messages (looking for results)
+        test_context = None
+        for i in range(len(request.messages) - 1, -1, -1):
+            m = request.messages[i]
+            if "Test results:" in m["content"] or "Test failures:" in m["content"]:
+                test_context = m["content"]
+                break
 
-        # 2. Call AI Agent
-        ai_response_data = await ai_agent.get_socratic_response(
-            messages=request.messages, 
+        result = await ai_agent.get_socratic_response(
+            messages=request.messages,
             problem_context=request.problem_context,
             current_code=request.current_code,
-            user_level=user_level
+            user_level=user_level,
+            test_results=test_context
         )
         
-        # 3. Store new insights if provided by Gemini
-        if supabase_admin and isinstance(ai_response_data, dict):
-            update_payload = {}
-            if "level" in ai_response_data:
-                update_payload["user_level"] = ai_response_data["level"]
-            if "lacking_areas" in ai_response_data:
-                update_payload["lacking_areas"] = ai_response_data["lacking_areas"]
-            if "teacher_suggestions" in ai_response_data:
-                update_payload["teacher_suggestions"] = ai_response_data["teacher_suggestions"]
-                
-            if update_payload:
-                update_payload["student_id"] = request.student_id
-                update_payload["problem_id"] = request.problem_id
-                
-                try:
-                    # Upsert relying on UNIQUE(student_id, problem_id)
-                    # Note: Since there's no ON CONFLICT DO UPDATE built into this simple client easily, 
-                    # we will check if record exists first.
-                    check = supabase_admin.table("ai_insights").select("id").eq("student_id", request.student_id).eq("problem_id", request.problem_id).execute()
-                    if check.data and len(check.data) > 0:
-                        row_id = check.data[0]["id"]
-                        supabase_admin.table("ai_insights").update(update_payload).eq("id", row_id).execute()
-                    else:
-                        # Ensure user_level is set if we are inserting
-                        if "user_level" not in update_payload:
-                             update_payload["user_level"] = "Unknown"
-                        supabase_admin.table("ai_insights").insert(update_payload).execute()
-                except Exception as e:
-                    print(f"Failed to save AI Insights to database: {e}")
-                    
-        # 4. Return just the conversational response to the student
-        reply_text = ai_response_data.get("response", "I encountered an error formatting my response.") if isinstance(ai_response_data, dict) else str(ai_response_data)
-        
+        # If Gemini returned insights, save them
+        if supabase_admin and isinstance(result, dict) and "lacking_areas" in result:
+            try:
+                supabase_admin.table("ai_insights").insert({
+                    "student_id": user.get("sub"),
+                    "problem_id": request.problem_id,
+                    "user_level": result.get("level", user_level),
+                    "lacking_areas": result.get("lacking_areas"),
+                    "teacher_suggestions": result.get("teacher_suggestions")
+                }).execute()
+            except Exception as e:
+                print(f"Failed to save AI Insights: {e}")
+
+        reply_text = result.get("response", "I encountered an error formatting my response.") if isinstance(result, dict) else str(result)
         return {"role": "assistant", "content": reply_text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/hint")
+async def get_hint(request: HintRequest, user: dict = Depends(get_current_user)):
+    try:
+        result = await ai_agent.get_progressive_hint(
+            level=request.level,
+            problem_context=request.problem_context,
+            current_code=request.current_code,
+            test_results=request.test_results
+        )
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/graph")
 async def get_graph(user: dict = Depends(get_current_user)):
     try:
-        # Use the real user ID from the token
         user_id = user.get("sub", "demo_user")
         data = ontology_service.get_user_mastery(user_id)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/teacher/class_stats")
+async def get_class_stats(student_ids: str, user: dict = Depends(get_current_user)):
+    """Backend analytics for teachers to see mastery across a set of students."""
+    try:
+        s_ids = student_ids.split(",")
+        stats = analytics_service.get_class_mastery_stats(s_ids)
+        feed = analytics_service.get_live_feed(s_ids)
+        return {
+            "status": "success",
+            "stats": stats,
+            "feed": feed
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/teacher/student_graph/{sid}")
+async def get_student_graph(sid: str, user: dict = Depends(get_current_user)):
+    """Allows teacher to view a specific student's mastery graph."""
+    try:
+        data = ontology_service.get_user_mastery(sid)
         return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -264,3 +333,132 @@ async def get_student_assignments(student_id: str, user: dict = Depends(get_curr
     
     # Fallback to in-memory
     return [a for a in assignments if a.student_id == student_id and a.status == "pending"]
+
+@app.post("/logs")
+async def log_interaction_endpoint(request: LogRequest, user: dict = Depends(get_current_user)):
+    try:
+        gamification_service.log_interaction(
+            student_id=request.student_id,
+            problem_id=request.problem_id,
+            action_type=request.action_type,
+            metadata=request.metadata
+        )
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/leaderboard")
+async def get_leaderboard_endpoint():
+    try:
+        data = gamification_service.get_leaderboard()
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/award_points")
+async def award_points_endpoint(request: ScoreRequest, user: dict = Depends(get_current_user)):
+    try:
+        # 1. Update Gamification (Points, Streaks)
+        res = gamification_service.award_points(user_id=request.student_id, points=request.score)
+        
+        # 2. Update Mastery if score is high (100)
+        if request.score >= 100:
+            # Look up the concept for this problem
+            concept = "Variables"
+            if supabase_admin:
+                try:
+                    p_resp = supabase_admin.table("problems").select("concepts").eq("id", request.problem_id).maybe_single().execute()
+                    if p_resp.data and p_resp.data.get("concepts"):
+                        # Most problems have a list of concepts; we take the primary one
+                        concept = p_resp.data["concepts"][0]
+                except Exception as e:
+                    print(f"Error fetching problem concept: {e}")
+            
+            ontology_service.update_mastery(request.student_id, concept, True)
+            
+        return {"status": "success", "data": res}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/next_task")
+async def get_next_task(user: dict = Depends(get_current_user)):
+    try:
+        user_id = user.get("sub", "demo_user")
+        
+        # 1. Get current mastery from Ontology
+        mastery_data = ontology_service.get_user_mastery(user_id)
+        mastered_concepts = mastery_data.get("mastered", [])
+        available_concepts = mastery_data.get("available", ["Variables"])
+        concept = available_concepts[0] if available_concepts else "General"
+        
+        # 2. Get dynamic recommendation from Assessment ML Engine
+        recommendation = assessment_engine.recommend_next_task(user_id, mastered_concepts)
+        
+        # 3. Build Mock Problem Data based on Recommendation
+        rec_type = recommendation["recommended_type"]
+        difficulty = recommendation["difficulty"]
+        
+        problem_data = {
+            "id": 999 + int(time.time()) % 1000,
+            "title": f"Dynamic {concept} Task",
+            "description": f"This is an auto-generated {rec_type} task tailored to your current performance.",
+            "difficulty": difficulty,
+            "task_type": rec_type,
+            "concepts": [concept],
+            "starter_code": "",
+            "test_cases": [],
+            "examples": [],
+            "constraints": []
+        }
+        
+        if rec_type == "Code Comprehension":
+            problem_data["description"] = "What will the following code output?\n```python\nx = 5\nfor i in range(3):\n    x += i\nprint(x)\n```"
+            problem_data["options"] = ["5", "8", "11", "Error"]
+            problem_data["answer"] = "8"
+        elif rec_type == "Debugging":
+            problem_data["description"] = "This code is supposed to return the sum of a list. Can you fix the bug?"
+            problem_data["starter_code"] = "def solution(nums):\n    total = 0\n    for i in range(len(nums)+1): # Bug is here!\n        total += nums[i]\n    return total"
+            problem_data["test_cases"] = [{"input": "[1, 2, 3]", "expected": "6"}]
+        else:
+            problem_data["description"] = f"### Master {concept}!\nWelcome to your personalized growth path. Write a Python function `solution(val)` that takes a value and returns it exactly as it is. This tests your ability to handle basic function definitions and return types in {concept}."
+            problem_data["starter_code"] = "def solution(val):\n    # Your logic here to demonstrate " + concept + "\n    return val"
+            problem_data["test_cases"] = [{"input": "42", "expected": "42"}]
+
+        return {
+            "status": "success",
+            "concept_focus": concept,
+            "recommendation": recommendation,
+            "problem": problem_data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Recruiter Endpoints ---
+
+@app.get("/api/recruiter/candidates")
+async def get_candidates(recruiter: RecruiterService = Depends(get_recruiter)):
+    candidates = recruiter.get_top_candidates(limit=20)
+    return {"candidates": candidates}
+
+@app.get("/api/recruiter/insights/{student_id}")
+async def get_talent_insights(student_id: str, recruiter: RecruiterService = Depends(get_recruiter)):
+    insights = await recruiter.get_talent_insights(student_id)
+    return insights
+
+@app.post("/api/security/log")
+async def log_security_event(request: SecurityLogRequest, user: dict = Depends(get_current_user)):
+    if not supabase_admin:
+        return {"status": "skipped", "reason": "No admin client"}
+    
+    try:
+        supabase_admin.table("security_logs").insert({
+            "user_id": user.get("sub"),
+            "problem_id": request.problem_id,
+            "event_type": request.event_type,
+            "wpm": request.wpm,
+            "metadata": request.metadata or {}
+        }).execute()
+        return {"status": "success"}
+    except Exception as e:
+        print(f"Security log error: {e}")
+        return {"status": "error", "message": str(e)}

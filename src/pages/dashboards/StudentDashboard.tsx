@@ -1,7 +1,9 @@
 import { Button } from "@/components/ui/button";
+import { motion } from "framer-motion";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { BookOpen, Code2, Trophy, Copy } from "lucide-react";
+import { BookOpen, Code2, Trophy, Copy, Lock, Unlock, CheckCircle } from "lucide-react";
+import { LearningGraph } from "@/components/LearningGraph";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -40,6 +42,16 @@ interface ActivityItem {
     score: number;
 }
 
+interface GraphData {
+    mastered: string[];
+    available: string[];
+    locked: string[];
+    graph_structure: {
+        nodes: any[];
+        links: any[];
+    };
+}
+
 const StudentDashboard = () => {
     const navigate = useNavigate();
     const { user } = useAuth();
@@ -49,6 +61,8 @@ const StudentDashboard = () => {
     const [showAlert, setShowAlert] = useState(false);
     const [points, setPoints] = useState<UserPoints>({ problems_solved: 0, current_streak: 0, total_points: 0 });
     const [recentActivity, setRecentActivity] = useState<ActivityItem[]>([]);
+    const [graphData, setGraphData] = useState<GraphData | null>(null);
+    const [isGraphLoading, setIsGraphLoading] = useState(true);
 
     useEffect(() => {
         if (!user?.id) return;
@@ -102,8 +116,20 @@ const StudentDashboard = () => {
                     })));
                 }
 
+                // Fetch Learning Graph
+                const { data: { session } } = await supabase.auth.getSession();
+                const graphResp = await fetch("/api/graph", {
+                    headers: { Authorization: `Bearer ${session?.access_token}` }
+                });
+                if (graphResp.ok) {
+                    const gData = await graphResp.json();
+                    setGraphData(gData);
+                }
+                setIsGraphLoading(false);
+
             } catch (e) {
                 console.error("Failed to fetch dashboard data:", e);
+                setIsGraphLoading(false);
             }
         };
 
@@ -111,9 +137,10 @@ const StudentDashboard = () => {
 
         // Setup Realtime Listeners
         const channel = supabase.channel('student_updates')
-            .on('postgres', { event: '*', schema: 'public', table: 'assignments', filter: `student_id=eq.${user.id}` }, () => fetchDashboardData())
-            .on('postgres', { event: '*', schema: 'public', table: 'submissions', filter: `user_id=eq.${user.id}` }, () => fetchDashboardData())
-            .on('postgres', { event: '*', schema: 'public', table: 'user_points', filter: `user_id=eq.${user.id}` }, () => fetchDashboardData())
+            .on('postgres_changes' as any, { event: '*', schema: 'public', table: 'assignments', filter: `student_id=eq.${user.id}` }, () => fetchDashboardData())
+            .on('postgres_changes' as any, { event: '*', schema: 'public', table: 'submissions', filter: `user_id=eq.${user.id}` }, () => fetchDashboardData())
+            .on('postgres_changes' as any, { event: '*', schema: 'public', table: 'user_points', filter: `user_id=eq.${user.id}` }, () => fetchDashboardData())
+            .on('postgres_changes' as any, { event: '*', schema: 'public', table: 'user_mastery', filter: `user_id=eq.${user.id}` }, () => fetchDashboardData())
             .subscribe();
 
         return () => {
@@ -184,7 +211,7 @@ const StudentDashboard = () => {
                                                 <p className="font-semibold">Problems: {a.problem_ids.join(", ")}</p>
                                                 <p className="text-xs text-muted-foreground">{a.time_limit_minutes} min time limit</p>
                                             </div>
-                                            <Button size="sm" onClick={() => navigate(`/practice/${a.problem_ids[0]}?assignment=true`)}>
+                                            <Button size="sm" onClick={() => navigate(`/practice/${a.problem_ids[0]}?assignment_id=${a.id}`)}>
                                                 Start Now
                                             </Button>
                                         </div>
@@ -216,25 +243,47 @@ const StudentDashboard = () => {
                     </Card>
                     <Card>
                         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Current Streak</CardTitle>
-                            <Trophy className="h-4 w-4 text-muted-foreground" />
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold">{points.current_streak} Days</div>
-                            <p className="text-xs text-muted-foreground">Don't break the chain!</p>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Concepts Mastered</CardTitle>
+                            <CardTitle className="text-sm font-medium">Mastery Progress</CardTitle>
                             <BookOpen className="h-4 w-4 text-muted-foreground" />
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold">{Math.min(100, points.problems_solved * 5)}%</div>
-                            <Progress value={Math.min(100, points.problems_solved * 5)} className="mt-2" />
+                            <div className="text-2xl font-bold">
+                                {graphData ? `${graphData.mastered.length} / ${graphData.graph_structure.nodes.length}` : "0 / 0"}
+                            </div>
+                            <Progress 
+                                value={graphData ? (graphData.mastered.length / graphData.graph_structure.nodes.length) * 100 : 0} 
+                                className="mt-2" 
+                            />
                         </CardContent>
                     </Card>
                 </div>
+
+                {/* Learning Path Section */}
+                <Card className="border-primary/20 bg-card/50 backdrop-blur-sm shadow-xl overflow-hidden">
+                    <CardHeader className="border-b border-border/50 bg-muted/30">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <CardTitle className="flex items-center gap-2">
+                                    <Trophy className="h-5 w-5 text-warning" />
+                                    Your Learning Path
+                                </CardTitle>
+                                <CardDescription>Unlock new concepts by mastering prerequisites</CardDescription>
+                            </div>
+                            <div className="flex gap-4 text-xs">
+                                <span className="flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-success" /> Mastered</span>
+                                <span className="flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-primary" /> Available</span>
+                                <span className="flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-muted-foreground" /> Locked</span>
+                            </div>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="p-8">
+                        <LearningGraph 
+                            data={graphData} 
+                            isLoading={isGraphLoading} 
+                            onNodeClick={(id) => graphData?.available.includes(id) && navigate("/problems")}
+                        />
+                    </CardContent>
+                </Card>
 
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
                     <Card className="col-span-4">

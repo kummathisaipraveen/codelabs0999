@@ -34,7 +34,7 @@ const Navbar = () => {
               <Code2 className="h-4 w-4 text-primary-foreground" />
             </div>
             <span className="text-lg font-bold tracking-tight">
-              CODE <span className="gradient-text">LABS</span>
+              CODE <span className="gradient-text">COACH</span>
             </span>
           </Link>
         </Button>

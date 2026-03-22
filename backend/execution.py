@@ -19,47 +19,55 @@ from typing import List, Dict, Any
 
 class ExecutionService:
     def __init__(self):
-        # Detect Python binary available on this system
-        self.python_bin = self._find_python()
+        pass
 
-    def _find_python(self) -> str:
-        """Finds the Python executable available on the system."""
-        candidates = ["python3", "python", sys.executable]
-        for candidate in candidates:
-            try:
-                result = subprocess.run(
-                    [candidate, "--version"],
-                    check=True,
-                    capture_output=True,
-                    timeout=3,
-                )
-                if result.returncode == 0:
-                    print(f"✅ Execution service using: {candidate}")
-                    return candidate
-            except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-                continue
-        print("⚠️ Warning: No Python binary found. Execution will fail.")
-        return "python"
+    def execute_code(self, code_data: Any, test_cases: List[Dict[str, str]]) -> Dict[str, Any]:
+        """
+        Executes Python code against test cases securely inside a Docker container.
+        Supports single string (Legacy) or Dict[filename, content] (Multi-file).
+        """
+        files = {}
+        if isinstance(code_data, str):
+            files["solution.py"] = code_data
+        elif isinstance(code_data, dict):
+            files = code_data
+        else:
+            return {"status": "error", "error": f"Invalid code format: {type(code_data)}", "results": []}
 
-    def execute_code(self, code: str, test_cases: List[Dict[str, str]]) -> Dict[str, Any]:
-        """
-        Executes Python code against test cases.
-        Uses direct subprocess execution (no Docker required).
-        """
         with tempfile.TemporaryDirectory() as temp_dir:
-            harness = self._generate_harness(test_cases)
-            full_code = code + "\n\n" + harness
+            # 1. Write user files
+            for filename, content in files.items():
+                file_path = os.path.join(temp_dir, filename)
+                # Ensure subdirectories exist if any
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(content)
 
-            code_path = os.path.join(temp_dir, "solution.py")
-            with open(code_path, "w", encoding="utf-8") as f:
-                f.write(full_code)
+            # 2. Determine target module and generate harness
+            # If main.py exists, use it. Otherwise use solution.py or the first .py file.
+            target_file = "main.py" if "main.py" in files else ("solution.py" if "solution.py" in files else next((f for f in files.keys() if f.endswith(".py")), "solution.py"))
+            target_module = target_file.replace(".py", "").replace("/", ".")
+            
+            harness = self._generate_harness(test_cases, target_module)
+            with open(os.path.join(temp_dir, "_runner.py"), "w", encoding="utf-8") as f:
+                f.write(harness)
 
             try:
+                docker_cmd = [
+                    "docker", "run", "--rm",
+                    "-v", f"{temp_dir}:/app",
+                    "-w", "/app",
+                    "--network", "none",     # Block internet access
+                    "--memory", "128m",      # Limit RAM to 128MB
+                    "--cpus", "0.5",         # Limit CPU to half a core
+                    "python:3.10-slim",
+                    "python", "_runner.py"
+                ]
+
                 result = subprocess.run(
-                    [self.python_bin, code_path],
+                    docker_cmd,
                     capture_output=True,
-                    timeout=10,
-                    cwd=temp_dir,
+                    timeout=15,  # Slightly longer timeout to account for docker boot time
                 )
 
                 stdout = result.stdout.decode("utf-8", errors="replace")
@@ -101,37 +109,49 @@ class ExecutionService:
             except Exception as e:
                 return {"status": "system_error", "error": str(e), "results": []}
 
-    def _generate_harness(self, test_cases: List[Dict[str, str]]) -> str:
+    def _generate_harness(self, test_cases: List[Dict[str, str]], target_module: str) -> str:
         """
-        Generates the test runner harness injected after user code.
-        Captures stdout, measures execution time, and outputs JSON results.
+        Generates a separate test runner that imports the user's module.
         """
         cases_json = json.dumps(test_cases)
         return f"""
-import json, sys, time, traceback
+import json, sys, time, traceback, importlib
 from io import StringIO
 
+_target_module_name = "{target_module}"
 _test_cases = {cases_json}
 _results = []
+
+try:
+    _module = importlib.import_module(_target_module_name)
+    # Re-import to ensure fresh state if needed, though docker is fresh anyway
+except Exception:
+    print("__RESULTS__:" + json.dumps([{{
+        "test_case": 0,
+        "input": "Import",
+        "expected": "Success",
+        "actual": "Failed",
+        "passed": False,
+        "error": traceback.format_exc()
+    }}]))
+    sys.exit(0)
 
 for _i, _case in enumerate(_test_cases):
     _inp = _case.get("input", "")
     _exp = _case.get("expected", _case.get("output", ""))
     _start = time.time()
     try:
-        import inspect
-        _funcs = [v for k, v in locals().items() if callable(v) and type(v).__name__ == 'function' and not k.startswith('_')]
+        # Try to find a function in the module
+        _funcs = [v for k, v in vars(_module).items() if callable(v) and not k.startswith('_')]
         if _funcs:
-            _func = _funcs[-1]
-            _args = eval("(" + _inp + ",)")
+            _func = _funcs[-1] # Usually the last defined function is the solution
+            # Handle list/dict inputs safely
+            _args = eval("(" + str(_inp) + ",)")
             _got = _func(*_args)
         else:
-            try:
-                _got = eval(_inp)
-            except SyntaxError:
-                _ns = {{}}
-                exec(_inp, _ns)
-                _got = _ns.get("result", None)
+            # Fallback to eval if no functions found (e.g. constant check)
+            _got = eval(_inp, vars(_module))
+            
         _elapsed = round((time.time() - _start) * 1000, 2)
         _actual = json.dumps(_got) if _got is not None else "None"
         _passed = _actual.replace(" ", "").lower() == str(_exp).replace(" ", "").lower()

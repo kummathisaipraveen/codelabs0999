@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Play, RotateCcw, Send, MessageCircle, ChevronRight, CheckCircle2, XCircle, Lightbulb, Loader2, Bot, User, Zap, Clock, Brain } from "lucide-react";
+import { Play, RotateCcw, Send, MessageCircle, ChevronRight, CheckCircle2, XCircle, Lightbulb, Loader2, Bot, User, Zap, Clock, Brain, FileCode, Plus, X, FolderCode } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -38,7 +38,8 @@ const PracticePage = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [searchParams] = useSearchParams();
-  const isAssignment = searchParams.get("assignment") === "true";
+  const assignmentId = searchParams.get("assignment_id");
+  const isAssignment = !!assignmentId || searchParams.get("assignment") === "true";
 
   const motivationalMessages = [
     "You're doing great! Keep it up! 🚀",
@@ -80,8 +81,17 @@ const PracticePage = () => {
   const problemId = id ? parseInt(id) : 1;
 
   const { data: problem, isLoading } = useQuery({
-    queryKey: ["problem", problemId],
+    queryKey: ["problem", problemId, searchParams.get("v")], // added v param to force refetch across navigation
     queryFn: async () => {
+      if (problemId === 999) {
+        const { data: { session } } = await supabase.auth.getSession();
+        const res = await fetch("/api/next_task", {
+          headers: { Authorization: `Bearer ${session?.access_token}` }
+        });
+        if (!res.ok) throw new Error("Failed to fetch next task");
+        const json = await res.json();
+        return json.problem;
+      }
       const { data, error } = await supabase
         .from("problems")
         .select("*")
@@ -93,7 +103,15 @@ const PracticePage = () => {
     },
   });
 
-  const [code, setCode] = useState("");
+  const [files, setFiles] = useState<Record<string, string>>({ "main.py": "" });
+  const [activeFile, setActiveFile] = useState("main.py");
+  const [openFiles, setOpenFiles] = useState<string[]>(["main.py"]);
+  const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  
+  // Security / Anti-Cheating State
+  const keystrokeTimes = useRef<number[]>([]);
+  const lastKeyTime = useRef<number>(0);
+  const pasteCount = useRef<number>(0);
   const [output, setOutput] = useState<string | null>(null);
   const [showChat, setShowChat] = useState(false);
   const [chatInput, setChatInput] = useState("");
@@ -106,6 +124,10 @@ const PracticePage = () => {
   const [serverResponse, setServerResponse] = useState<{ tests_passed: number; tests_total: number; score: number; submission_id: string } | null>(null);
   const [aiInsight, setAiInsight] = useState<string | null>(null);
   const [isInsightLoading, setIsInsightLoading] = useState(false);
+  const [hintLevel, setHintLevel] = useState(0);
+  const [isHintLoading, setIsHintLoading] = useState(false);
+  const [numFailures, setNumFailures] = useState(0);
+  const [showStuckIntervention, setShowStuckIntervention] = useState(false);
 
   // Pyodide hook kept for future use when CDN is accessible; execution currently uses backend
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -153,7 +175,7 @@ const PracticePage = () => {
         body: JSON.stringify({
           messages: updatedMessages,
           problem_context: problemContext,
-          current_code: code,
+          current_code: JSON.stringify(files),
           problem_id: parseInt(id || "0"),
           student_id: user?.id
         }),
@@ -186,13 +208,35 @@ const PracticePage = () => {
   // Unescape literal \n strings stored in the DB into real newlines
   useEffect(() => {
     if (problem?.default_code !== undefined) {
-      // DB may store newlines as literal \n string — convert to real newlines
-      const cleaned = problem.default_code.replace(/\\n/g, "\n").replace(/\\t/g, "    ");
-      setCode(cleaned);
+      try {
+        const raw = problem.default_code.replace(/\\n/g, "\n").replace(/\\t/g, "    ");
+        const parsed = JSON.parse(raw);
+        if (typeof parsed === 'object' && parsed !== null) {
+          setFiles(parsed);
+          const firstFile = Object.keys(parsed)[0] || "main.py";
+          setActiveFile(firstFile);
+          setOpenFiles([firstFile]);
+        } else {
+          throw new Error("Not a dict");
+        }
+      } catch (e) {
+        const cleaned = problem.default_code.replace(/\\n/g, "\n").replace(/\\t/g, "    ");
+        setFiles({ "main.py": cleaned });
+        setActiveFile("main.py");
+        setOpenFiles(["main.py"]);
+      }
     }
-  }, [problem?.id]); // Only re-init when problem ID changes
+    setSelectedOption(null);
+    setHasRun(false);
+    setRunResults([]);
+    setOutput(null);
+    setServerResponse(null);
+    setHintLevel(0);
+    setNumFailures(0);
+    setShowStuckIntervention(false);
+  }, [problem?.id, problem?.description, problem?.title]); // Reset whenever the problem metadata changes
 
-  // Tab key → insert 4 spaces for Python indentation
+  // Tab key → insert 4 spaces for Python indentation, Enter key → auto-indent
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Tab") {
       e.preventDefault();
@@ -200,14 +244,108 @@ const PracticePage = () => {
       const start = el.selectionStart;
       const end = el.selectionEnd;
       const indent = "    "; // 4 spaces
-      const newCode = code.substring(0, start) + indent + code.substring(end);
-      setCode(newCode);
+      const currentCode = files[activeFile] || "";
+      const newCode = currentCode.substring(0, start) + indent + currentCode.substring(end);
+      setFiles({ ...files, [activeFile]: newCode });
       // Restore cursor position after the inserted spaces
       requestAnimationFrame(() => {
         el.selectionStart = el.selectionEnd = start + indent.length;
       });
+    } else if (e.key === "Enter") {
+      const el = e.currentTarget;
+      const start = el.selectionStart;
+      const val = el.value;
+      const currentCode = files[activeFile] || "";
+      
+      // Find the start of the current line
+      let lineStart = start - 1;
+      while (lineStart >= 0 && val[lineStart] !== "\n") {
+        lineStart--;
+      }
+      lineStart++;
+      
+      const currentLine = val.substring(lineStart, start);
+      const match = currentLine.match(/^\s*/);
+      let indent = match ? match[0] : "";
+      
+      // If previous line ends with colon, increase indentation by 4 spaces
+      if (currentLine.trim().endsWith(":")) {
+        indent += "    ";
+      }
+      
+      if (indent.length > 0) {
+        e.preventDefault();
+        const end = el.selectionEnd;
+        const newCode = currentCode.substring(0, start) + "\n" + indent + currentCode.substring(end);
+        setFiles({ ...files, [activeFile]: newCode });
+        
+        requestAnimationFrame(() => {
+          el.selectionStart = el.selectionEnd = start + 1 + indent.length;
+        });
+      }
     }
-  }, [code]);
+
+    // Keystroke Analytics
+    const now = Date.now();
+    if (lastKeyTime.current > 0) {
+      const delta = now - lastKeyTime.current;
+      if (delta < 5000) { // Ignore long pauses
+        keystrokeTimes.current.push(delta);
+      }
+    }
+    lastKeyTime.current = now;
+
+    // Periodic Security Sync (every 50 keystrokes)
+    if (keystrokeTimes.current.length >= 50 && problem?.id) {
+      const avgLatency = keystrokeTimes.current.reduce((a, b) => a + b, 0) / keystrokeTimes.current.length;
+      // Heuristic: 100ms per char ~ 120 WPM. < 50ms is highly suspicious for sustained typing.
+      const wpm = Math.round(60000 / (avgLatency * 5)); // Roughly 5 chars per word
+      
+      if (wpm > 200) { // Flag inhuman speed
+        supabase.auth.getSession().then(({ data: { session } }) => {
+          if (session) {
+            fetch("/api/security/log", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.access_token}` },
+              body: JSON.stringify({
+                problem_id: problem.id,
+                event_type: "SPEED_BURST",
+                wpm: wpm,
+                metadata: { avg_latency: avgLatency, sample_count: keystrokeTimes.current.length }
+              })
+            });
+          }
+        });
+      }
+      keystrokeTimes.current = []; // Reset batch
+    }
+  }, [files, activeFile, problem?.id]);
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    e.preventDefault();
+    pasteCount.current += 1;
+    toast({
+      title: "Action Blocked",
+      description: "Copy-paste is disabled to encourage active learning! Please type your solution.",
+      variant: "destructive"
+    });
+    
+    if (problem?.id) {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session) {
+          fetch("/api/security/log", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.access_token}` },
+            body: JSON.stringify({
+              problem_id: problem.id,
+              event_type: "PASTE_ATTEMPT",
+              metadata: { total_attempts: pasteCount.current }
+            })
+          });
+        }
+      });
+    }
+  };
 
 
   const testCases = (problem?.test_cases as unknown as TestCase[] | null) || [];
@@ -230,7 +368,7 @@ const PracticePage = () => {
       const resp = await fetch("/api/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, language: "python", test_cases: testCases }),
+        body: JSON.stringify({ code: files, language: "python", test_cases: testCases }),
       });
 
       const data = await resp.json();
@@ -252,6 +390,17 @@ const PracticePage = () => {
         submission_id: "run-" + Date.now(),
       });
 
+      if (passed < total) {
+          const newFailCount = numFailures + 1;
+          setNumFailures(newFailCount);
+          if (newFailCount >= 3) {
+              setShowStuckIntervention(true);
+          }
+      } else {
+          setNumFailures(0);
+          setShowStuckIntervention(false);
+      }
+
       const summary = results
         .map((r: { passed: boolean; input: string; expected: string; actual?: string; execution_time_ms?: number }, i: number) =>
           `${r.passed ? "✓" : "✗"} Test ${i + 1}${r.execution_time_ms !== undefined ? ` (${r.execution_time_ms}ms)` : ""}: ${r.input} → expected ${r.expected}, got ${r.actual ?? "error"}`
@@ -267,10 +416,10 @@ const PracticePage = () => {
           const insightPrompt = [{
             role: "user", content:
               `Python problem: "${problem.title}" (${problem.difficulty})\n` +
-              `User code:\n\`\`\`python\n${code}\n\`\`\`\n` +
-              `Test results: ${passed}/${total} passed.\n` +
-              (firstFail
-                ? `First failure: input=${firstFail.input}, expected=${firstFail.expected}, got=${firstFail.actual}\n`
+               `User project files:\n\`\`\`json\n${JSON.stringify(files, null, 2)}\n\`\`\`\n` +
+               `Test results: ${passed}/${total} passed.\n` +
+               (firstFail
+                 ? `First failure: input=${firstFail.input}, expected=${firstFail.expected}, got=${firstFail.actual}\n`
                 : "All tests passed!\n") +
               `Give ONLY: 1 code quality observation (e.g. time complexity), 1 Socratic nudge if not all passed, and skill level: Beginner/Developing/Proficient/Advanced. Max 3 sentences. Be concise.`
           }];
@@ -301,6 +450,54 @@ const PracticePage = () => {
     }
   };
 
+  const handleGetHint = async () => {
+    if (!user || isHintLoading) return;
+    
+    const nextLevel = hintLevel + 1;
+    if (nextLevel > 3) {
+      toast({ title: "Max hints reached", description: "You've used all the hints! Try breaking the problem down into smaller steps." });
+      return;
+    }
+
+    setIsHintLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const firstFail = runResults.find(r => !r.passed);
+      
+      const resp = await fetch("/api/hint", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session?.access_token}`
+        },
+        body: JSON.stringify({
+          level: nextLevel,
+          problem_context: problem?.title || "",
+          current_code: JSON.stringify(files),
+          problem_id: problem?.id,
+          test_results: firstFail ? `Input: ${firstFail.input}, Expected: ${firstFail.expected}, Got: ${firstFail.actual}` : "None"
+        })
+      });
+
+      if (!resp.ok) throw new Error("Hint service unavailable");
+      
+      const data = await resp.json();
+      setHintLevel(nextLevel);
+      
+      // Add hint to chat
+      const assistantMsg: ChatMsg = { 
+        role: "assistant", 
+        content: `💡 **Hint Level ${nextLevel}:**\n${data.hint}` 
+      };
+      setChatMessages(prev => [...prev, assistantMsg]);
+      setShowChat(true);
+      
+    } catch (e) {
+      toast({ title: "Hint error", description: "Could not fetch hint. Use the chat for help!", variant: "destructive" });
+    } finally {
+      setIsHintLoading(false);
+    }
+  };
 
   const handleSubmit = async () => {
     if (!user) {
@@ -314,14 +511,84 @@ const PracticePage = () => {
       return;
     }
 
-    // Results are already submitted server-side during execution
     const passed = serverResponse.tests_passed;
     const total = serverResponse.tests_total;
 
-    toast({
-      title: passed === total ? "All tests passed! 🎉" : "Solution submitted",
-      description: `${passed}/${total} tests passed. ${passed === total ? "Points awarded!" : "Keep trying!"}`,
-    });
+    setIsSubmitting(true);
+    try {
+      const score = total > 0 ? Math.round((passed / total) * 100) : 0;
+      
+      const { error: subError } = await supabase.from("submissions").insert({
+        user_id: user.id,
+        problem_id: problem.id,
+        code: JSON.stringify(files),
+        score: score,
+        tests_passed: passed,
+        tests_total: total,
+      });
+
+      if (subError) throw subError;
+
+      const { data: currentPoints } = await supabase
+        .from("user_points")
+        .select("*")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      const newPoints = (currentPoints?.total_points || 0) + score;
+      const newSolved = passed === total ? (currentPoints?.problems_solved || 0) + 1 : (currentPoints?.problems_solved || 0);
+
+      const { error: pointsError } = await supabase
+        .from("user_points")
+        .upsert({
+          user_id: user.id,
+          total_points: newPoints,
+          problems_solved: newSolved,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "user_id" });
+
+      if (pointsError) throw pointsError;
+
+      // New Gamification API Call
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        fetch("/api/award_points", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${session?.access_token}`
+          },
+          body: JSON.stringify({
+            student_id: user.id,
+            problem_id: problem.id,
+            score: score
+          })
+        });
+      } catch (e) { console.error("Gamification error: ", e); }
+
+      // If this was an assignment and all tests passed, mark it as completed
+      if (assignmentId && passed === total) {
+        const { error: assignmentError } = await (supabase as any)
+          .from("assignments")
+          .update({ status: "completed" })
+          .eq("id", assignmentId);
+
+        if (assignmentError) throw assignmentError;
+      }
+
+      toast({
+        title: passed === total ? "All tests passed! 🎉" : "Solution submitted",
+        description: `${passed}/${total} tests passed. ${passed === total ? `Awarded ${score} points!` : "Keep trying!"}`,
+      });
+    } catch (e: any) {
+      toast({
+        title: "Submission failed",
+        description: e.message || "Could not save your progress.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (isLoading) {
@@ -413,17 +680,49 @@ const PracticePage = () => {
           <div className="flex items-center justify-between border-b border-border/50 px-4 py-2">
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono">
-                <div className="h-2 w-2 rounded-full bg-success" />
-                solution.py
+                <FileCode className="h-3 w-3" />
+                {activeFile}
               </div>
+            </div>
+            {/* Tabs */}
+            <div className="flex-1 flex overflow-x-auto no-scrollbar">
+              {openFiles.map(filename => (
+                <div 
+                  key={filename}
+                  onClick={() => setActiveFile(filename)}
+                  className={`flex items-center gap-2 px-3 py-1 cursor-pointer border-r border-border/50 text-[10px] whitespace-nowrap transition-colors ${activeFile === filename ? 'bg-card text-foreground border-b-2 border-b-primary' : 'bg-background text-muted-foreground hover:bg-secondary/30'}`}
+                >
+                  <FileCode className="h-3 w-3" />
+                  {filename}
+                  <X 
+                    className="h-2.5 w-2.5 hover:text-destructive" 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const next = openFiles.filter(f => f !== filename);
+                      if (next.length > 0) {
+                        setOpenFiles(next);
+                        if (activeFile === filename) setActiveFile(next[0]);
+                      }
+                    }}
+                  />
+                </div>
+              ))}
             </div>
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => {
-                  const cleaned = (problem.default_code || "").replace(/\\n/g, "\n").replace(/\\t/g, "    ");
-                  setCode(cleaned);
+                  try {
+                    const raw = (problem.default_code || "").replace(/\\n/g, "\n").replace(/\\t/g, "    ");
+                    const parsed = JSON.parse(raw);
+                    setFiles(parsed);
+                    setActiveFile(Object.keys(parsed)[0] || "main.py");
+                  } catch (e) {
+                    const cleaned = (problem.default_code || "").replace(/\\n/g, "\n").replace(/\\t/g, "    ");
+                    setFiles({ "main.py": cleaned });
+                    setActiveFile("main.py");
+                  }
                   setOutput(null);
                   setHasRun(false);
                   setRunResults([]);
@@ -433,6 +732,16 @@ const PracticePage = () => {
               >
                 <RotateCcw className="h-3 w-3" />
                 Reset
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleGetHint}
+                disabled={isHintLoading || !problem}
+                className={`gap-1.5 text-xs border-primary/30 text-primary hover:bg-primary/5 ${hintLevel > 0 ? 'bg-primary/10' : ''}`}
+              >
+                {isHintLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Lightbulb className="h-3 w-3" />}
+                {hintLevel === 0 ? "Need a Hint?" : `Hint ${hintLevel}/3`}
               </Button>
               <Button
                 size="sm"
@@ -451,21 +760,111 @@ const PracticePage = () => {
                 {isSubmitting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
                 Submit
               </Button>
+              {serverResponse?.tests_passed === serverResponse?.tests_total && serverResponse?.tests_total > 0 && (
+                <Button
+                  size="sm"
+                  onClick={() => navigate("/practice/999?v=" + Date.now())}
+                  className="gap-1.5 text-xs gradient-primary text-primary-foreground ml-2 glow-primary"
+                >
+                  Next Task <ChevronRight className="h-3 w-3" />
+                </Button>
+              )}
             </div>
           </div>
 
           {/* Code editor area */}
           <div className="flex-1 flex flex-col">
-            <div className="flex-1 relative">
-              <Textarea
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                onKeyDown={handleKeyDown}
-                className="absolute inset-0 resize-none rounded-none border-0 bg-card font-mono text-sm leading-relaxed p-4 focus-visible:ring-0 focus-visible:ring-offset-0"
-                spellCheck={false}
-                placeholder="Write your Python solution here..."
-              />
-            </div>
+            {problem.task_type === "Code Comprehension" ? (
+              <div className="flex-1 p-8 overflow-y-auto bg-card">
+                 <h3 className="text-lg font-bold mb-4">Choose the correct answer:</h3>
+                 <div className="space-y-3">
+                    {problem.options?.map((opt: string) => (
+                        <div key={opt} 
+                          onClick={() => setSelectedOption(opt)}
+                          className={`p-4 rounded-xl border cursor-pointer transition-all ${selectedOption === opt ? 'border-primary bg-primary/10' : 'border-border/50 hover:bg-secondary/50'}`}
+                        >
+                            <span className="font-mono text-sm">{opt}</span>
+                        </div>
+                    ))}
+                 </div>
+                 <Button 
+                    className="mt-6 w-full gradient-primary text-primary-foreground"
+                    disabled={!selectedOption}
+                    onClick={() => {
+                        const passed = selectedOption === problem.answer;
+                        setHasRun(true);
+                        setRunResults([{ input: 'MCQ', expected: problem.answer, actual: selectedOption || 'None', passed }]);
+                        setServerResponse({ tests_passed: passed ? 1 : 0, tests_total: 1, score: passed ? 100 : 0, submission_id: 'mcq' });
+                        setOutput(passed ? "✅ Correct answer! Click Submit to save points." : "❌ Incorrect. Try again.");
+                    }}
+                 >
+                    Verify Answer
+                 </Button>
+                 <div className="mt-8 p-4 bg-primary/10 border border-primary/20 rounded-xl">
+                    <div className="text-xs text-primary font-bold mb-1">Why are you seeing this?</div>
+                    <p className="text-xs text-muted-foreground">The Engine detected frustration or struggle in your logs and dynamically adjusted the difficulty to a Comprehension Task!</p>
+                 </div>
+              </div>
+            ) : (
+              <div className="flex-1 relative">
+                {problem.task_type === "Debugging" && (
+                  <div className="absolute top-0 right-0 m-4 z-10 px-3 py-1.5 text-xs font-bold bg-warning/20 text-warning border border-warning/30 rounded-md">
+                    🐛 BUG SWARM! Fix the pre-filled code to pass.
+                  </div>
+                )}
+                <div className="absolute inset-0 flex">
+                  {/* File Explorer Sidebar */}
+                  <div className="w-48 bg-muted/30 border-r border-border/50 flex flex-col">
+                    <div className="p-3 flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase text-muted-foreground">Explorer</span>
+                      <Button size="icon" variant="ghost" className="h-5 w-5" onClick={() => {
+                        const name = prompt("Filename?");
+                        if (name) {
+                          setFiles({ ...files, [name]: "" });
+                          if (!openFiles.includes(name)) setOpenFiles([...openFiles, name]);
+                          setActiveFile(name);
+                        }
+                      }}>
+                        <Plus className="h-3 w-3" />
+                      </Button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto">
+                      {Object.keys(files).map(filename => (
+                        <div 
+                          key={filename}
+                          onClick={() => {
+                            setActiveFile(filename);
+                            if (!openFiles.includes(filename)) setOpenFiles([...openFiles, filename]);
+                          }}
+                          className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-secondary/50 transition-colors ${activeFile === filename ? 'text-primary bg-primary/5' : 'text-muted-foreground'}`}
+                        >
+                          <FileCode className="h-3.5 w-3.5" />
+                          {filename}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="p-2 border-t border-border/50">
+                      <div className="flex items-center gap-2 p-2 bg-success/5 rounded border border-success/20 text-[10px] text-success font-medium">
+                        <FolderCode className="h-3 w-3" /> Virtual Workspace
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Mono Editor */}
+                  <div className="flex-1 relative bg-card">
+                    <Textarea
+                      value={files[activeFile] || ""}
+                      onChange={(e) => setFiles({ ...files, [activeFile]: e.target.value })}
+                      onKeyDown={handleKeyDown}
+                      onPaste={handlePaste}
+                      className="absolute inset-0 resize-none rounded-none border-0 bg-transparent font-mono text-sm leading-relaxed p-4 focus-visible:ring-0 focus-visible:ring-offset-0"
+                      spellCheck={false}
+                      placeholder="Select a file to edit..."
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Output console */}
             <div className="h-64 border-t border-border/50">
@@ -532,6 +931,30 @@ const PracticePage = () => {
                       <p className="text-xs text-muted-foreground whitespace-pre-wrap">{aiInsight}</p>
                     )}
                   </div>
+                )}
+
+                {showStuckIntervention && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mt-4 rounded-lg border border-warning/50 bg-warning/5 p-4"
+                  >
+                    <div className="flex items-center gap-2 text-sm font-bold text-warning mb-2">
+                        <Zap className="h-4 w-4" />
+                        You've got this!
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-3">
+                        I noticed this problem is proving a bit tricky. Don't worry — everyone gets stuck! Would you like a nudge from our AI coach?
+                    </p>
+                    <div className="flex gap-2">
+                        <Button size="sm" variant="outline" className="h-8 text-xs border-warning/30 text-warning" onClick={handleGetHint}>
+                            Get Hint
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => setShowStuckIntervention(false)}>
+                            Dismiss
+                        </Button>
+                    </div>
+                  </motion.div>
                 )}
               </div>
             </div>
