@@ -37,12 +37,13 @@ app = FastAPI(title="CodeCoach Backend")
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 
 async def get_current_user(authorization: Optional[str] = Header(None)):
-    # Dev mode: if JWT secret is not configured, skip auth entirely
-    if not SUPABASE_JWT_SECRET:
-        return {"id": "demo_user", "sub": "demo_user"}
-    
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing Authorization Header")
+    
+    if not SUPABASE_JWT_SECRET:
+        # In production, this MUST be set. If not, fail securely.
+        print("❌ CRITICAL: SUPABASE_JWT_SECRET is missing. Rejecting all requests.")
+        raise HTTPException(status_code=500, detail="Server security configuration error")
     
     try:
         token = authorization.replace("Bearer ", "")
@@ -127,12 +128,7 @@ assignments: List[Assignment] = []
 
 # CORS Setup
 origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:8080",
-    "http://127.0.0.1:8080",
-    "http://localhost:8081",
-    "http://127.0.0.1:8081",
+    "*", # Allow all for production Vercel ease, or restrict to specific domains if required
 ]
 
 app.add_middleware(

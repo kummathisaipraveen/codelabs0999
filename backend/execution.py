@@ -19,13 +19,28 @@ from typing import List, Dict, Any
 
 class ExecutionService:
     def __init__(self):
-        pass
+        self.has_docker = self._check_docker()
+
+    def _check_docker(self) -> bool:
+        try:
+            subprocess.run(["docker", "--version"], capture_output=True, check=True)
+            return True
+        except:
+            return False
 
     def execute_code(self, code_data: Any, test_cases: List[Dict[str, str]]) -> Dict[str, Any]:
         """
-        Executes Python code against test cases securely inside a Docker container.
-        Supports single string (Legacy) or Dict[filename, content] (Multi-file).
+        Executes Python code against test cases. 
+        Uses Docker if available, otherwise returns a graceful error.
+        NOTE: Production execution should happen via Pyodide in the browser.
         """
+        if not self.has_docker:
+            return {
+                "status": "error",
+                "error": "Backend Docker execution is unavailable in this environment (Vercel). Please ensure the frontend is using the Pyodide runner for client-side execution.",
+                "results": []
+            }
+
         files = {}
         if isinstance(code_data, str):
             files["solution.py"] = code_data
@@ -44,7 +59,6 @@ class ExecutionService:
                     f.write(content)
 
             # 2. Determine target module and generate harness
-            # If main.py exists, use it. Otherwise use solution.py or the first .py file.
             target_file = "main.py" if "main.py" in files else ("solution.py" if "solution.py" in files else next((f for f in files.keys() if f.endswith(".py")), "solution.py"))
             target_module = target_file.replace(".py", "").replace("/", ".")
             
@@ -67,7 +81,7 @@ class ExecutionService:
                 result = subprocess.run(
                     docker_cmd,
                     capture_output=True,
-                    timeout=15,  # Slightly longer timeout to account for docker boot time
+                    timeout=15, 
                 )
 
                 stdout = result.stdout.decode("utf-8", errors="replace")
@@ -88,7 +102,7 @@ class ExecutionService:
                 if not result_line:
                     return {
                         "status": "error",
-                        "error": "No results returned from harness. Make sure your code defines a solution() function.",
+                        "error": "No results returned from harness.",
                         "results": [],
                         "logs": stdout,
                     }
@@ -105,7 +119,7 @@ class ExecutionService:
                 }
 
             except subprocess.TimeoutExpired:
-                return {"status": "timeout", "error": "Execution timed out (10s limit)", "results": []}
+                return {"status": "timeout", "error": "Execution timed out (15s limit)", "results": []}
             except Exception as e:
                 return {"status": "system_error", "error": str(e), "results": []}
 
