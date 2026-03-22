@@ -84,9 +84,12 @@ for _i, _case in enumerate(_test_cases):
     _old_stdout = sys.stdout
     sys.stdout = _stdout_capture
     try:
-        # 1. Try to find a user-defined function in the environment
-        _all_names = set(globals().keys()) | set(locals().keys())
-        _funcs = [v for k, v in globals().items() if callable(v) and not k.startswith('_') and k != 'buildHarness']
+        # 1. Look for user-defined functions (only the ones in __main__ module)
+        # Standard imports like json/sys/time etc. are modules and not part of __main__
+        _funcs = [v for k, v in globals().items() 
+                  if callable(v) and not k.startswith('_') 
+                  and getattr(v, '__module__', '') == '__main__'
+                  and k != 'buildHarness']
         
         if _funcs:
             _func = _funcs[-1] # Usually the last defined function is the solution
