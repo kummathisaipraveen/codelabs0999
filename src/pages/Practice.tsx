@@ -36,6 +36,7 @@ const PracticePage = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { runCode: runLocal, isLoading: isPyodideLoading } = usePythonRunner();
   const { toast } = useToast();
   const [searchParams] = useSearchParams();
   const assignmentId = searchParams.get("assignment_id");
@@ -364,20 +365,15 @@ const PracticePage = () => {
     setOutput("Running your code...");
 
     try {
-      // Use backend /api/execute — runs Python via local subprocess (no CDN needed)
-      const resp = await fetch("/api/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: files, language: "python", test_cases: testCases }),
-      });
-
-      const data = await resp.json();
-
-      if (!resp.ok || data.status === "error" || data.status === "system_error" || data.status === "timeout") {
-        throw new Error(data.error || data.detail || `Execution failed (${data.status})`);
+      // Use local Pyodide runner for production-grade, zero-latency execution
+      // This works on Vercel where Docker-based backend execution is restricted.
+      const result = await runLocal(Object.values(files).join("\n\n"), testCases);
+      
+      if (result.status === "error") {
+        throw new Error(result.error || "Execution failed");
       }
 
-      const results = data.results;
+      const results = result.results;
       setRunResults(results);
 
       const passed = results.filter((r: { passed: boolean }) => r.passed).length;
@@ -406,7 +402,7 @@ const PracticePage = () => {
           `${r.passed ? "✓" : "✗"} Test ${i + 1}${r.execution_time_ms !== undefined ? ` (${r.execution_time_ms}ms)` : ""}: ${r.input} → expected ${r.expected}, got ${r.actual ?? "error"}`
         )
         .join("\n");
-      setOutput(`${passed}/${total} tests passed\n\n${summary}${data.logs ? "\n\nOutput:\n" + data.logs : ""}`);
+      setOutput(`${passed}/${total} tests passed\n\n${summary}${result.stdout ? "\n\nOutput:\n" + result.stdout : ""}`);
 
       // Async AI insight — appears after results, non-blocking
       if (problem) {
