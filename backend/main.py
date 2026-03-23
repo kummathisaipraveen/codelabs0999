@@ -393,7 +393,11 @@ async def award_points_endpoint(request: ScoreRequest, user: dict = Depends(get_
                     if p_resp.data and p_resp.data.get("concepts"):
                         # Get first tag and map it
                         raw_tag = p_resp.data["concepts"][0]
-                        concept = concept_mapping.get(raw_tag, "Functions") # Fallback to Functions if unknown
+                        core_concepts = ["Variables", "Data Types", "Conditionals", "Loops", "Functions", "Recursion", "Lists", "Dictionaries", "Classes"]
+                        if raw_tag in core_concepts:
+                            concept = raw_tag
+                        else:
+                            concept = concept_mapping.get(raw_tag, "Functions")
                 except Exception as e:
                     print(f"Error fetching problem concept: {e}")
             
