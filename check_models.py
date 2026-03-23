@@ -4,6 +4,8 @@ import requests
 import json
 
 def check_models():
+    from dotenv import load_dotenv, find_dotenv
+    load_dotenv(find_dotenv())
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         print("Error: GEMINI_API_KEY not set.")

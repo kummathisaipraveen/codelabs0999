@@ -368,14 +368,32 @@ async def award_points_endpoint(request: ScoreRequest, user: dict = Depends(get_
         
         # 2. Update Mastery if score is high (100)
         if request.score >= 100:
+            # Map algorithm tags to our 9 core curriculum concepts
+            concept_mapping = {
+                "Arrays": "Lists",
+                "Two Pointers": "Lists",
+                "Hash Table": "Dictionaries",
+                "Strings": "Data Types",
+                "Math": "Data Types",
+                "DP": "Recursion",
+                "Recursion": "Recursion",
+                "Trees": "Classes",
+                "Graphs": "Classes",
+                "Linked List": "Classes",
+                "Stack": "Lists",
+                "Design": "Classes"
+            }
+            
             # Look up the concept for this problem
-            concept = "Variables"
+            concept = "Variables" # Absolute fallback
+            
             if supabase_admin:
                 try:
                     p_resp = supabase_admin.table("problems").select("concepts").eq("id", request.problem_id).maybe_single().execute()
                     if p_resp.data and p_resp.data.get("concepts"):
-                        # Most problems have a list of concepts; we take the primary one
-                        concept = p_resp.data["concepts"][0]
+                        # Get first tag and map it
+                        raw_tag = p_resp.data["concepts"][0]
+                        concept = concept_mapping.get(raw_tag, "Functions") # Fallback to Functions if unknown
                 except Exception as e:
                     print(f"Error fetching problem concept: {e}")
             
