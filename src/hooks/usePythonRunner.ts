@@ -92,14 +92,17 @@ for _i, _case in enumerate(_test_cases):
                   and k != 'buildHarness']
         
         if _funcs:
-            _func = _funcs[-1] # Usually the last defined function is the solution
+            _func = _funcs[0] # The FIRST user-defined function is almost always the solution
             try:
                 # Handle inputs that are tuples/lists of args safely
                 _args = eval("(" + str(_inp) + ",)")
                 _got = _func(*_args)
-            except:
-                # Fallback to direct eval if argument unpacking fails
-                _got = eval(_inp)
+            except TypeError:
+                # Fallback: maybe input is a single arg not needing unpacking
+                try:
+                    _got = _func(eval(str(_inp)))
+                except:
+                    _got = eval(_inp)
         else:
             # Fallback for simple expressions or constant checks
             _got = eval(_inp)

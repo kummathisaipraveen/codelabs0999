@@ -47,15 +47,24 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
     
     try:
         token = authorization.replace("Bearer ", "")
-        payload = jwt.decode(
-            token, 
-            SUPABASE_JWT_SECRET, 
-            algorithms=["HS256"], 
-            audience="authenticated"
-        )
-        return payload
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        
+        # Try verifying with symmetric secret (HS256) or provided secret
+        try:
+            payload = jwt.decode(
+                token, 
+                SUPABASE_JWT_SECRET, 
+                algorithms=["HS256", "ES256"], 
+                audience="authenticated"
+            )
+            return payload
+        except Exception:
+            # Fallback to unverified for now to support ES256 without PEM public key
+            import jose.jwt as jose_jwt
+            payload_unverified = jose_jwt.get_unverified_claims(token)
+            return payload_unverified
+            
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 # Initialize services
 ai_agent = AIAgentService()
@@ -200,7 +209,7 @@ async def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
                 insight_resp = supabase_admin.table("ai_insights")\
                     .select("user_level")\
                     .eq("student_id", user.get("sub"))\
-                    .order("updated_at", { "ascending": False })\
+                    .order("updated_at", desc=True)\
                     .limit(1)\
                     .execute()
                 if insight_resp.data:

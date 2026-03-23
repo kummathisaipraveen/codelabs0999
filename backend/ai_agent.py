@@ -10,8 +10,8 @@ load_dotenv(find_dotenv())
 class AIAgentService:
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        # Fallback to gemini-2.5-flash which was found in the user's available models list
-        self.api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        # Use gemini-flash-latest which is confirmed to be available
+        self.api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
         
         if not self.api_key:
             print("⚠️ Warning: GEMINI_API_KEY (or GOOGLE_API_KEY) not found. AI Chat will use mock responses.")

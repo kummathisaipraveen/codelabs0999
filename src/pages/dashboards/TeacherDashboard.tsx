@@ -94,7 +94,7 @@ const TeacherDashboard = () => {
             return;
         }
 
-        // Fetch profiles
+        // Fetch profiles — use LEFT JOIN logic by fetching all then matching
         const { data: profiles } = await (supabase as any).from('profiles').select('user_id, display_name').in('user_id', studentIds);
 
         // Fetch recent assignments for these students
@@ -115,20 +115,22 @@ const TeacherDashboard = () => {
         const globalCompleted = allAssignments.filter((a: any) => a.status === 'completed').length;
         setGlobalCompletion(allAssignments.length > 0 ? Math.round((globalCompleted / allAssignments.length) * 100) : 0);
 
-        // Map data together
-        const mappedRoster = (profiles || []).map((p: any) => {
-            const studentAssignments = allAssignments.filter((a: any) => a.student_id === p.user_id);
+        // Map data together — use student ID as fallback if no profile exists
+        const profileMap = new Map((profiles || []).map((p: any) => [p.user_id, p]));
+        const mappedRoster = studentIds.map((sid: string) => {
+            const profile = profileMap.get(sid);
+            const studentAssignments = allAssignments.filter((a: any) => a.student_id === sid);
             const completed = studentAssignments.filter((a: any) => a.status === 'completed').length;
             const total = studentAssignments.length;
             const score = total > 0 ? Math.round((completed / total) * 100) : 0;
 
             // Grab the most recent insight for this student
-            const studentInsights = (insightsData || []).filter((i: any) => i.student_id === p.user_id);
+            const studentInsights = (insightsData || []).filter((i: any) => i.student_id === sid);
             const latestInsight = studentInsights.length > 0 ? studentInsights[0] : null;
 
             return {
-                id: p.user_id,
-                name: p.display_name || 'Unknown Student',
+                id: sid,
+                name: profile?.display_name || `Student ${sid.slice(0, 8)}`,
                 score: score,
                 status: total > 0 && completed === total ? 'Completed All' : (total > 0 ? `${completed}/${total} Completed` : 'No Assignments'),
                 insights: latestInsight ? {
